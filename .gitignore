@@ -1,0 +1,52 @@
+# Binaries and executable files
+# ------------------------------
+bin/
+dist/
+*.exe
+*.exe-
+*.dll
+*.so
+*.dylib
+main
+
+# Test binaries & coverage
+# ------------------------
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Environment variables & secrets
+# -------------------------------
+.env
+.env.*
+!.env.example
+*.env
+
+# IDE and Editor settings
+# -----------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+# OS generated files
+# ------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+# ----
+*.log
+logs/
+
+# Go vendor (uncomment if you don't commit vendor dependencies)
+# vendor/
