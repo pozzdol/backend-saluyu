@@ -9,13 +9,13 @@ import (
 	"github.com/pozzdol/backend-saluyu/internal/handler"
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 	"github.com/pozzdol/backend-saluyu/internal/service"
+	"github.com/pozzdol/backend-saluyu/internal/token"
 )
 
 func main() {
 	cfg := config.Load()
 
 	db, err := database.NewPostgres(cfg.DBSource)
-
 	if err != nil {
 		log.Fatal("cannot connect to db:", err)
 	}
@@ -30,17 +30,19 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	log.Printf("listening on port http://localhost%s", cfg.ServerPort)
+	tokenMaker := token.NewMaker(cfg.JWTSecret, cfg.JWTDuration)
 
 	userRepo := repository.NewUserRepository(db)
-	userSvc := service.NewUserService(userRepo)
+	userSvc := service.NewUserService(userRepo, tokenMaker)
 	userHandler := handler.NewUserHandler(userSvc)
 
 	api := r.Group("/api/v1")
 	{
 		api.POST("/register", userHandler.Register)
+		api.POST("/login", userHandler.Login)
 	}
 
+	log.Printf("listening on http://localhost%s", cfg.ServerPort)
 	if err := r.Run(cfg.ServerPort); err != nil {
 		log.Fatal("cannot start server:", err)
 	}

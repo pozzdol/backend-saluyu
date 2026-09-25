@@ -5,10 +5,14 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pozzdol/backend-saluyu/internal/model"
 )
 
-var ErrUserNotFound = errors.New("user not found")
+var (
+	ErrUserNotFound = errors.New("user not found")
+	ErrEmailTaken   = errors.New("email already taken")
+)
 
 type UserRepository struct {
 	db *sql.DB
@@ -24,8 +28,14 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 	VALUES ($1, $2, $3, $4, $5)
 	RETURNING id, created_at, updated_at
 	`
-	return r.db.QueryRowContext(ctx, query, user.Name, user.Email, user.Password, user.Image, user.IsActive).
+	err := r.db.QueryRowContext(ctx, query, user.Name, user.Email, user.Password, user.Image, user.IsActive).
 		Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+		return ErrEmailTaken
+	}
+	return err
 }
 
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*model.User, error) {

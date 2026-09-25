@@ -10,7 +10,7 @@ type User struct {
 	ID        uuid.UUID `json:"id"`
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
-	Password  string    `json:"password"`
+	Password  string    `json:"-"`
 	Image     string    `json:"img_url"`
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
@@ -20,7 +20,12 @@ type User struct {
 type RegisterRequest struct {
 	Name     string `json:"name" binding:"required,min=3,max=100"`
 	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6,max=100"`
+	Password string `json:"password" binding:"required,min=6,max=72"`
+}
+
+type LoginRequest struct {
+	Email    string `json:"email" binding:"required,email"`
+	Password string `json:"password" binding:"required"`
 }
 
 type UserResponse struct {
@@ -29,6 +34,11 @@ type UserResponse struct {
 	Email    string    `json:"email"`
 	Image    string    `json:"img_url"`
 	IsActive bool      `json:"is_active"`
+}
+
+type LoginResponse struct {
+	Token string       `json:"token"`
+	User  UserResponse `json:"user"`
 }
 
 func ToUserResponse(u *User) UserResponse {
