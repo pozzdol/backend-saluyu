@@ -16,8 +16,10 @@ type User struct {
 	IsActive bool      `json:"is_active"`
 	// PasswordChangedAt is set by the app clock, the same clock that stamps token iat.
 	PasswordChangedAt time.Time `json:"-"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	// StartDate is the day the books open; nil until the opening balance is set.
+	StartDate *time.Time `json:"-"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type RegisterRequest struct {
@@ -73,6 +75,8 @@ type UserResponse struct {
 	Email    string    `json:"email"`
 	Image    string    `json:"img_url"`
 	IsActive bool      `json:"is_active"`
+	// StartDate as YYYY-MM-DD, or null: the frontend sends a new user to the opening-balance page.
+	StartDate *string `json:"start_date"`
 }
 
 // Session is what login and refresh hand out. The refresh token never goes in the JSON body:
@@ -86,10 +90,20 @@ type Session struct {
 
 func ToUserResponse(u *User) UserResponse {
 	return UserResponse{
-		ID:       u.ID,
-		Name:     u.Name,
-		Email:    u.Email,
-		Image:    u.Image,
-		IsActive: u.IsActive,
+		ID:        u.ID,
+		Name:      u.Name,
+		Email:     u.Email,
+		Image:     u.Image,
+		IsActive:  u.IsActive,
+		StartDate: DateString(u.StartDate),
 	}
+}
+
+// DateString formats an optional calendar date as YYYY-MM-DD.
+func DateString(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.Format(time.DateOnly)
+	return &s
 }

@@ -16,7 +16,7 @@ var (
 	ErrEmailTaken   = errors.New("email already taken")
 )
 
-const userColumns = `id, name, email, password, img_url, is_active, password_changed_at, created_at, updated_at`
+const userColumns = `id, name, email, password, img_url, is_active, password_changed_at, start_date, created_at, updated_at`
 
 type UserRepository struct {
 	db *sql.DB
@@ -77,6 +77,7 @@ func scanUser(row *sql.Row) (*model.User, error) {
 		&user.Image,
 		&user.IsActive,
 		&user.PasswordChangedAt,
+		&user.StartDate,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)

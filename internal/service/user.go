@@ -177,7 +177,8 @@ func (s *UserService) Me(ctx context.Context, claims *token.Claims) (*model.User
 		return nil, ErrUserInactive
 	}
 	// ponytail: a token issued in the same millisecond as the change survives; not worth a token version column.
-	if claims.IssuedAt == nil || claims.IssuedAt.Before(user.PasswordChangedAt.Truncate(time.Millisecond)) {
+	// +1ms: iat travels as a float of seconds and the JWT library truncates it, so .123 can come back as .122.
+	if claims.IssuedAt == nil || claims.IssuedAt.Add(time.Millisecond).Before(user.PasswordChangedAt.Truncate(time.Millisecond)) {
 		return nil, ErrTokenRevoked
 	}
 	return user, nil

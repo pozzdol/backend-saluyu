@@ -19,6 +19,10 @@ var (
 	ErrSameAccount      = errors.New("from and to account must differ")
 	ErrWrongAccountType = errors.New("account type does not fit this kind of transaction")
 	ErrUnbalanced       = errors.New("journal entry is not balanced")
+	ErrOpeningLocked    = repository.ErrOpeningLocked
+	ErrBooksNotEmpty    = repository.ErrBooksNotEmpty
+	ErrNotOpened        = errors.New("set your opening balance before recording transactions")
+	ErrBeforeStart      = errors.New("date is before the day your books open")
 )
 
 // LedgerRepository is what the ledger needs from storage. *repository.LedgerRepository implements it.
@@ -32,6 +36,9 @@ type LedgerRepository interface {
 	ListEntries(ctx context.Context, userID uuid.UUID, f model.EntryFilter) ([]model.Entry, int, error)
 	LedgerLines(ctx context.Context, userID, accountID uuid.UUID, from, to *time.Time) (int64, []model.LedgerRow, error)
 	TrialBalanceTotals(ctx context.Context, userID uuid.UUID, asOf time.Time) ([]model.TrialBalanceRow, error)
+	StartDate(ctx context.Context, userID uuid.UUID) (*time.Time, error)
+	BalanceAsOf(ctx context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error)
+	ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, e *model.Entry) error
 }
 
 type LedgerService struct {
@@ -109,10 +116,31 @@ func (s *LedgerService) PostEntry(ctx context.Context, userID uuid.UUID, req mod
 	return e, nil
 }
 
-// post is the single way a journal entry gets written. Later phases (opening balance,
-// cash count, contacts, shared loans) build their own lines and call it too.
+// post is the single way a journal entry gets written. Later phases (cash count,
+// contacts, shared loans) build their own lines and call it too.
 // accounts must contain every account used by the lines, already filtered to this user.
 func (s *LedgerService) post(ctx context.Context, userID uuid.UUID, e *model.Entry, accounts map[uuid.UUID]model.Account) error {
+	// ponytail: start date read outside the insert transaction; the opening can only change
+	// while the books are empty, so the window is a user posting in two tabs during onboarding.
+	start, err := s.repo.StartDate(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if start == nil {
+		return ErrNotOpened
+	}
+	if e.EntryDate.Before(*start) {
+		return fmt.Errorf("%w (%s)", ErrBeforeStart, start.Format(time.DateOnly))
+	}
+	if err := validate(e, accounts); err != nil {
+		return err
+	}
+	return s.repo.CreateEntry(ctx, userID, e)
+}
+
+// validate checks that every line uses an active account of this user, has exactly one
+// positive side, and that debits equal credits. It also fills in account code and name.
+func validate(e *model.Entry, accounts map[uuid.UUID]model.Account) error {
 	var debit, credit int64
 	for i, l := range e.Lines {
 		a, ok := accounts[l.AccountID]
@@ -132,9 +160,8 @@ func (s *LedgerService) post(ctx context.Context, userID uuid.UUID, e *model.Ent
 	if debit != credit || len(e.Lines) < 2 {
 		return ErrUnbalanced
 	}
-
 	e.Date = e.EntryDate.Format(time.DateOnly)
-	return s.repo.CreateEntry(ctx, userID, e)
+	return nil
 }
 
 func (s *LedgerService) ListEntries(ctx context.Context, userID uuid.UUID, f model.EntryFilter) ([]model.Entry, int, error) {

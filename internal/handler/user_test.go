@@ -20,8 +20,9 @@ import (
 
 // fakeRepo is an in-memory service.UserRepository with the same unique-email rule as the DB.
 type fakeRepo struct {
-	mu    sync.Mutex
-	users map[uuid.UUID]*model.User
+	mu     sync.Mutex
+	users  map[uuid.UUID]*model.User
+	ledger *fakeLedger // start_date lives on users in the real DB; the fake ledger owns it here
 }
 
 func (f *fakeRepo) Create(_ context.Context, u *model.User) error {
@@ -58,6 +59,9 @@ func (f *fakeRepo) FindByID(_ context.Context, id uuid.UUID) (*model.User, error
 		return nil, repository.ErrUserNotFound
 	}
 	copied := *u
+	if f.ledger != nil {
+		copied.StartDate, _ = f.ledger.StartDate(context.Background(), id)
+	}
 	return &copied, nil
 }
 
@@ -142,7 +146,9 @@ func newTestServer() (*gin.Engine, *fakeRepo) {
 	sessions := &fakeSessions{rows: map[string]*fakeSession{}}
 	tm := token.NewMaker("test-secret", time.Minute)
 	r := gin.New()
-	ledger := NewLedgerHandler(service.NewLedgerService(newFakeLedger()))
+	fl := newFakeLedger()
+	repo.ledger = fl
+	ledger := NewLedgerHandler(service.NewLedgerService(fl))
 	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), ledger, tm)
 	return r, repo
 }

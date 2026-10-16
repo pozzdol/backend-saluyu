@@ -196,3 +196,69 @@ func (h *LedgerHandler) TrialBalance(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"data": tb})
 }
+
+func (h *LedgerHandler) GetOpening(c *gin.Context) {
+	o, err := h.svc.GetOpening(c.Request.Context(), currentClaims(c).UserID)
+	if err != nil {
+		fail(c, "get opening", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": o})
+}
+
+func (h *LedgerHandler) SetOpening(c *gin.Context) {
+	var req model.OpeningRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	o, err := h.svc.SetOpening(c.Request.Context(), currentClaims(c).UserID, req)
+	if err != nil {
+		fail(c, "set opening", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": o})
+}
+
+func (h *LedgerHandler) Balance(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	date, err := queryDate(c, "date")
+	if err != nil || date == nil {
+		badQuery(c, "date")
+		return
+	}
+	b, err := h.svc.Balance(c.Request.Context(), currentClaims(c).UserID, id, *date)
+	if err != nil {
+		fail(c, "get balance", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"balance": b}})
+}
+
+func (h *LedgerHandler) CashCount(c *gin.Context) {
+	var req model.ReconcileRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	res, err := h.svc.CashCount(c.Request.Context(), currentClaims(c).UserID, req)
+	if err != nil {
+		fail(c, "cash count", err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"data": res})
+}
+
+func (h *LedgerHandler) Reconcile(c *gin.Context) {
+	var req model.ReconcileRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	res, err := h.svc.Reconcile(c.Request.Context(), currentClaims(c).UserID, req)
+	if err != nil {
+		fail(c, "reconcile", err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"data": res})
+}

@@ -16,6 +16,8 @@ var (
 	ErrAccountNotFound  = errors.New("account not found")
 	ErrAccountCodeTaken = errors.New("account code already used")
 	ErrEntryNotFound    = errors.New("entry not found")
+	ErrOpeningLocked    = errors.New("the opening entry can only be changed on the opening balance page")
+	ErrBooksNotEmpty    = errors.New("opening balance can only change before other transactions exist")
 )
 
 const accountColumns = `id, code, name, type, category, normal_balance, is_active`
@@ -128,12 +130,24 @@ func (r *LedgerRepository) CreateEntry(ctx context.Context, userID uuid.UUID, e 
 	}
 	defer tx.Rollback() // no-op after Commit
 
-	// Lock the user row so two requests of the same user cannot both take MAX(entry_no)+1.
-	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, userID); err != nil {
+	if err := lockUser(ctx, tx, userID); err != nil {
 		return err
 	}
+	if err := insertEntry(ctx, tx, userID, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
-	err = tx.QueryRowContext(ctx, `
+// lockUser serializes writes of one user's books: two requests cannot both take
+// MAX(entry_no)+1, and the opening check cannot race a new entry.
+func lockUser(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
+	_, err := tx.ExecContext(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, userID)
+	return err
+}
+
+func insertEntry(ctx context.Context, tx *sql.Tx, userID uuid.UUID, e *model.Entry) error {
+	err := tx.QueryRowContext(ctx, `
 	INSERT INTO journal_entries (user_id, entry_no, entry_date, kind, description)
 	VALUES ($1, (SELECT COALESCE(MAX(entry_no), 0) + 1 FROM journal_entries WHERE user_id = $1), $2, $3, $4)
 	RETURNING id, entry_no, created_at`,
@@ -149,18 +163,75 @@ func (r *LedgerRepository) CreateEntry(ctx context.Context, userID uuid.UUID, e 
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
-func (r *LedgerRepository) DeleteEntry(ctx context.Context, userID, id uuid.UUID) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM journal_entries WHERE id = $1 AND user_id = $2`, id, userID)
+// ReplaceOpening swaps the opening entry and sets the start date, but only while the
+// books hold nothing else. e may be nil when every opening balance is zero.
+func (r *LedgerRepository) ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, e *model.Entry) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
+	defer tx.Rollback()
+
+	if err := lockUser(ctx, tx, userID); err != nil {
+		return err
+	}
+	var others int
+	err = tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM journal_entries WHERE user_id = $1 AND kind <> 'opening'`, userID).Scan(&others)
+	if err != nil {
+		return err
+	}
+	if others > 0 {
+		return ErrBooksNotEmpty
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM journal_entries WHERE user_id = $1 AND kind = 'opening'`, userID); err != nil {
+		return err
+	}
+	if e != nil {
+		if err := insertEntry(ctx, tx, userID, e); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET start_date = $2, updated_at = now() WHERE id = $1`, userID, startDate); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *LedgerRepository) StartDate(ctx context.Context, userID uuid.UUID) (*time.Time, error) {
+	var d *time.Time
+	err := r.db.QueryRowContext(ctx, `SELECT start_date FROM users WHERE id = $1`, userID).Scan(&d)
+	return d, err
+}
+
+// BalanceAsOf is an account's debits minus credits up to and including date.
+func (r *LedgerRepository) BalanceAsOf(ctx context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error) {
+	var b int64
+	err := r.db.QueryRowContext(ctx, `
+	SELECT COALESCE(SUM(l.debit - l.credit), 0)
+	FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
+	WHERE e.user_id = $1 AND l.account_id = $2 AND e.entry_date <= $3`, userID, accountID, date).Scan(&b)
+	return b, err
+}
+
+func (r *LedgerRepository) DeleteEntry(ctx context.Context, userID, id uuid.UUID) error {
+	var kind string
+	err := r.db.QueryRowContext(ctx, `SELECT kind FROM journal_entries WHERE id = $1 AND user_id = $2`, id, userID).Scan(&kind)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrEntryNotFound
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	if kind == "opening" {
+		return ErrOpeningLocked
+	}
+	_, err = r.db.ExecContext(ctx, `DELETE FROM journal_entries WHERE id = $1 AND user_id = $2`, id, userID)
+	return err
 }
 
 // ListEntries returns one page of entries (newest first) with their lines, plus the total match count.

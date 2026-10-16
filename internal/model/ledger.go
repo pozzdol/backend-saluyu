@@ -161,3 +161,36 @@ type TrialBalance struct {
 	TotalCredit int64             `json:"total_credit"`
 	Balanced    bool              `json:"balanced"`
 }
+
+type OpeningItem struct {
+	AccountID uuid.UUID `json:"account_id" binding:"required"`
+	Amount    int64     `json:"amount" binding:"gte=0"`
+}
+
+// OpeningRequest sets the real balance of each asset and liability account on the day the books open.
+type OpeningRequest struct {
+	StartDate string        `json:"start_date" binding:"required,datetime=2006-01-02"`
+	Items     []OpeningItem `json:"items" binding:"dive"`
+}
+
+type Opening struct {
+	StartDate *string `json:"start_date"`
+	Entry     *Entry  `json:"entry"`    // nil when not opened yet or every balance was zero
+	Editable  bool    `json:"editable"` // false once any other transaction exists
+}
+
+// ReconcileRequest compares the books with reality: cash counted in the wallet, or a bank statement.
+type ReconcileRequest struct {
+	AccountID uuid.UUID `json:"account_id" binding:"required"`
+	Date      string    `json:"date" binding:"required,datetime=2006-01-02"`
+	Actual    int64     `json:"actual" binding:"gte=0"`
+	// CounterAccountID absorbs the difference. Cash counts pick it themselves (5199 or 4199).
+	CounterAccountID *uuid.UUID `json:"counter_account_id"`
+}
+
+type ReconcileResult struct {
+	Book   int64  `json:"book"`
+	Actual int64  `json:"actual"`
+	Diff   int64  `json:"diff"` // actual - book; 0 posts nothing
+	Entry  *Entry `json:"entry"`
+}

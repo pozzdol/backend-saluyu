@@ -20,10 +20,56 @@ type fakeLedger struct {
 	mu       sync.Mutex
 	accounts map[uuid.UUID]map[uuid.UUID]*model.Account // user -> id -> account
 	entries  map[uuid.UUID][]*model.Entry               // user -> entries
+	start    map[uuid.UUID]time.Time                    // user -> start date
 }
 
 func newFakeLedger() *fakeLedger {
-	return &fakeLedger{accounts: map[uuid.UUID]map[uuid.UUID]*model.Account{}, entries: map[uuid.UUID][]*model.Entry{}}
+	return &fakeLedger{accounts: map[uuid.UUID]map[uuid.UUID]*model.Account{},
+		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{}}
+}
+
+func (f *fakeLedger) StartDate(_ context.Context, userID uuid.UUID) (*time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d, ok := f.start[userID]; ok {
+		return &d, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeLedger) BalanceAsOf(_ context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var b int64
+	for _, e := range f.entries[userID] {
+		if e.EntryDate.After(date) {
+			continue
+		}
+		for _, l := range e.Lines {
+			if l.AccountID == accountID {
+				b += l.Debit - l.Credit
+			}
+		}
+	}
+	return b, nil
+}
+
+func (f *fakeLedger) ReplaceOpening(_ context.Context, userID uuid.UUID, startDate time.Time, e *model.Entry) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := []*model.Entry{}
+	for _, old := range f.entries[userID] {
+		if old.Kind != "opening" {
+			return repository.ErrBooksNotEmpty
+		}
+	}
+	if e != nil {
+		e.ID, e.EntryNo, e.CreatedAt = uuid.New(), 1, time.Now()
+		kept = append(kept, e)
+	}
+	f.entries[userID] = kept
+	f.start[userID] = startDate
+	return nil
 }
 
 func (f *fakeLedger) userAccounts(userID uuid.UUID) map[uuid.UUID]*model.Account {
@@ -106,6 +152,9 @@ func (f *fakeLedger) DeleteEntry(_ context.Context, userID, id uuid.UUID) error 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i, e := range f.entries[userID] {
+		if e.ID == id && e.Kind == "opening" {
+			return repository.ErrOpeningLocked
+		}
 		if e.ID == id {
 			f.entries[userID] = append(f.entries[userID][:i], f.entries[userID][i+1:]...)
 			return nil
@@ -114,15 +163,21 @@ func (f *fakeLedger) DeleteEntry(_ context.Context, userID, id uuid.UUID) error 
 	return repository.ErrEntryNotFound
 }
 
-// ListEntries ignores filters: SQL filtering is not what these tests prove.
-func (f *fakeLedger) ListEntries(_ context.Context, userID uuid.UUID, _ model.EntryFilter) ([]model.Entry, int, error) {
+// ListEntries honors only kind and limit: SQL filtering is not what these tests prove.
+func (f *fakeLedger) ListEntries(_ context.Context, userID uuid.UUID, filter model.EntryFilter) ([]model.Entry, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []model.Entry{}
 	for _, e := range f.entries[userID] {
-		out = append(out, *e)
+		if filter.Kind == nil || e.Kind == *filter.Kind {
+			out = append(out, *e)
+		}
 	}
-	return out, len(out), nil
+	total := len(out)
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
+	}
+	return out, total, nil
 }
 
 func (f *fakeLedger) LedgerLines(_ context.Context, userID, accountID uuid.UUID, from, _ *time.Time) (int64, []model.LedgerRow, error) {
@@ -175,6 +230,13 @@ func signUp(t *testing.T, r *gin.Engine, email string) string {
 	return body["access_token"].(string)
 }
 
+// openBooks sets an all-zero opening balance so the user can post from date on.
+func openBooks(t *testing.T, r *gin.Engine, tok, date string) {
+	t.Helper()
+	code, body := call(t, r, "PUT", "/api/v1/opening", tok, `{"start_date":"`+date+`","items":[]}`)
+	expect(t, "open books", code, 200, body)
+}
+
 // accountIDs maps account code to ID for the logged-in user.
 func accountIDs(t *testing.T, r *gin.Engine, tok string) map[string]string {
 	t.Helper()
@@ -201,6 +263,7 @@ func TestLedgerFlow(t *testing.T) {
 		t.Fatalf("new user has %d accounts, want %d", len(acc), len(model.DefaultAccounts))
 	}
 	bank, tabungan, gaji, makan := acc["1001"], acc["1003"], acc["4001"], acc["5102"]
+	openBooks(t, r, tok, "2026-09-01")
 
 	// Salary 10,826,012.92: sen keep the cents exact.
 	code, body := call(t, r, "POST", "/api/v1/entries", tok, entryBody("income", "2026-09-25", 1082601292, gaji, bank))
@@ -284,6 +347,8 @@ func TestLedgerIsolatesUsers(t *testing.T) {
 	lida := signUp(t, r, "lida@x.com")
 	fikri := signUp(t, r, "fikri@x.com")
 	lidaAcc := accountIDs(t, r, lida)
+	openBooks(t, r, lida, "2026-09-01")
+	openBooks(t, r, fikri, "2026-09-01")
 
 	code, body := call(t, r, "POST", "/api/v1/entries", fikri, entryBody("income", "2026-09-25", 100, lidaAcc["4001"], lidaAcc["1001"]))
 	expect(t, "post into another user's accounts", code, 404, body)
@@ -295,4 +360,93 @@ func TestLedgerIsolatesUsers(t *testing.T) {
 	id := body["data"].(map[string]any)["id"].(string)
 	code, body = call(t, r, "DELETE", "/api/v1/entries/"+id, fikri, "")
 	expect(t, "delete another user's entry", code, 404, body)
+}
+
+func TestOpeningAndCashCount(t *testing.T) {
+	r, _ := newTestServer()
+	tok := signUp(t, r, "lida@x.com")
+	acc := accountIDs(t, r, tok)
+	bank, cash, gaji, makan := acc["1001"], acc["1002"], acc["4001"], acc["5102"]
+
+	code, body := call(t, r, "POST", "/api/v1/entries", tok, entryBody("expense", "2026-10-01", 100, bank, makan))
+	expect(t, "post before the books are open", code, 409, body)
+
+	code, body = call(t, r, "PUT", "/api/v1/opening", tok,
+		`{"start_date":"2026-10-01","items":[{"account_id":"`+acc["5102"]+`","amount":100}]}`)
+	expect(t, "opening on an expense account", code, 400, body)
+	code, body = call(t, r, "PUT", "/api/v1/opening", tok,
+		`{"start_date":"2026-10-01","items":[{"account_id":"`+acc["1101"]+`","amount":100}]}`)
+	expect(t, "opening on receivables without a contact", code, 400, body)
+
+	// Real balances on 1 Oct: Bank 5.796.012,92 and cash 600.000.
+	code, body = call(t, r, "PUT", "/api/v1/opening", tok, fmt.Sprintf(
+		`{"start_date":"2026-10-01","items":[{"account_id":%q,"amount":579601292},{"account_id":%q,"amount":60000000}]}`, bank, cash))
+	expect(t, "set opening", code, 200, body)
+	o := body["data"].(map[string]any)
+	if o["start_date"] != "2026-10-01" || o["editable"] != true {
+		t.Fatalf("opening: %v", o)
+	}
+	code, body = call(t, r, "GET", "/api/v1/me", tok, "")
+	if body["data"].(map[string]any)["start_date"] != "2026-10-01" {
+		t.Fatalf("/me does not report start_date: %v", body)
+	}
+
+	code, body = call(t, r, "GET", "/api/v1/reports/trial-balance?as_of=2026-10-01", tok, "")
+	tb := body["data"].(map[string]any)
+	if tb["balanced"] != true || tb["total_credit"] != float64(639601292) {
+		t.Fatalf("after opening, equity should be 6.396.012,92 on the credit side: %v", tb)
+	}
+
+	code, body = call(t, r, "POST", "/api/v1/entries", tok, entryBody("expense", "2026-09-30", 100, bank, makan))
+	expect(t, "entry before start date", code, 400, body)
+	code, body = call(t, r, "POST", "/api/v1/entries", tok, entryBody("income", "2026-10-02", 5000000, gaji, bank))
+	expect(t, "entry after opening", code, 201, body)
+
+	code, body = call(t, r, "PUT", "/api/v1/opening", tok, `{"start_date":"2026-10-01","items":[]}`)
+	expect(t, "change opening once books have entries", code, 409, body)
+	code, body = call(t, r, "GET", "/api/v1/entries", tok, "")
+	for _, e := range body["data"].([]any) {
+		if e := e.(map[string]any); e["kind"] == "opening" {
+			code, body = call(t, r, "DELETE", "/api/v1/entries/"+e["id"].(string), tok, "")
+			expect(t, "delete opening entry", code, 409, body)
+		}
+	}
+
+	// Cash count: 540.000 in the wallet vs 600.000 in the books -> 60.000 unrecorded spending.
+	code, body = call(t, r, "POST", "/api/v1/cash-counts", tok, `{"account_id":"`+cash+`","date":"2026-10-15","actual":54000000}`)
+	expect(t, "cash count short", code, 201, body)
+	res := body["data"].(map[string]any)
+	lines := res["entry"].(map[string]any)["lines"].([]any)
+	if res["diff"] != float64(-6000000) || lines[0].(map[string]any)["code"] != "1002" || lines[0].(map[string]any)["credit"] != float64(6000000) ||
+		lines[1].(map[string]any)["code"] != "5199" || lines[1].(map[string]any)["debit"] != float64(6000000) {
+		t.Fatalf("short cash must be Dr 5199 / Cr Cash: %v", res)
+	}
+	// Found 1.000 more later -> income 4199, never a negative expense.
+	code, body = call(t, r, "POST", "/api/v1/cash-counts", tok, `{"account_id":"`+cash+`","date":"2026-10-16","actual":54100000}`)
+	expect(t, "cash count over", code, 201, body)
+	lines = body["data"].(map[string]any)["entry"].(map[string]any)["lines"].([]any)
+	if lines[1].(map[string]any)["code"] != "4199" || lines[1].(map[string]any)["credit"] != float64(100000) {
+		t.Fatalf("extra cash must be Cr 4199: %v", lines)
+	}
+	code, body = call(t, r, "POST", "/api/v1/cash-counts", tok, `{"account_id":"`+cash+`","date":"2026-10-16","actual":54100000}`)
+	expect(t, "cash count equal", code, 201, body)
+	if body["data"].(map[string]any)["entry"] != nil {
+		t.Fatalf("no difference must post nothing: %v", body)
+	}
+
+	code, body = call(t, r, "GET", "/api/v1/accounts/"+cash+"/balance?date=2026-10-16", tok, "")
+	if body["data"].(map[string]any)["balance"] != float64(54100000) {
+		t.Fatalf("cash balance after counts: %v", body)
+	}
+
+	// Books: 5.796.012,92 + 50.000 salary = 5.846.012,92. Statement shows 2.500 less (admin fee).
+	code, body = call(t, r, "POST", "/api/v1/reconciliations", tok, fmt.Sprintf(
+		`{"account_id":%q,"date":"2026-10-16","actual":584351292,"counter_account_id":%q}`, bank, acc["5107"]))
+	expect(t, "reconcile bank", code, 201, body)
+	if body["data"].(map[string]any)["diff"] != float64(-250000) {
+		t.Fatalf("bank diff: %v", body)
+	}
+	code, body = call(t, r, "POST", "/api/v1/reconciliations", tok, fmt.Sprintf(
+		`{"account_id":%q,"date":"2026-10-16","actual":1,"counter_account_id":%q}`, bank, cash))
+	expect(t, "reconcile against an asset", code, 400, body)
 }
