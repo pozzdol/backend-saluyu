@@ -71,6 +71,15 @@ var apiErrors = []apiError{
 	{service.ErrAlreadyPaid, http.StatusConflict, "already_paid"},
 	{service.ErrPlanHasPayments, http.StatusConflict, "plan_has_payments"},
 
+	{service.ErrRuleNotFound, http.StatusNotFound, "rule_not_found"},
+	{service.ErrRuleMissing, http.StatusNotFound, "rule_not_found"},
+	{service.ErrOccurrenceHandled, http.StatusConflict, "occurrence_handled"},
+	{service.ErrNotDue, http.StatusConflict, "not_due"},
+	{service.ErrNeedsDay, http.StatusBadRequest, "needs_day"},
+	{service.ErrUnreadableFile, http.StatusBadRequest, "unreadable_file"},
+	{service.ErrNoColumns, http.StatusBadRequest, "no_columns"},
+	{service.ErrImportAccount, http.StatusBadRequest, "import_account"},
+
 	{service.ErrInvalidLink, http.StatusBadRequest, "invalid_link"},
 	{service.ErrMFAInvalid, http.StatusUnauthorized, "mfa_expired"},
 	{service.ErrInvalidCode, http.StatusBadRequest, "invalid_code"},

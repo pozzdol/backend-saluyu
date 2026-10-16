@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"log"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pozzdol/backend-saluyu/internal/config"
@@ -55,7 +57,10 @@ func main() {
 		log.Fatal("cannot set trusted proxies:", err)
 	}
 	creditHandler := handler.NewCreditHandler(service.NewCreditService(ledgerRepo, ledgerSvc))
-	handler.RegisterRoutes(r, userHandler, ledgerHandler, reportHandler, shareHandler, creditHandler, tokenMaker)
+	recurringSvc := service.NewRecurringService(ledgerRepo, ledgerSvc)
+	recurringSvc.StartJob(context.Background(), time.Hour)
+	automationHandler := handler.NewAutomationHandler(recurringSvc, service.NewImportService(ledgerRepo, ledgerSvc))
+	handler.RegisterRoutes(r, userHandler, ledgerHandler, reportHandler, shareHandler, creditHandler, automationHandler, tokenMaker)
 
 	log.Printf("listening on http://localhost%s", cfg.ServerPort)
 	if err := r.Run(cfg.ServerPort); err != nil {

@@ -169,7 +169,8 @@ func newTestServer() (*gin.Engine, *fakeRepo) {
 		Users: repo, Sessions: newFakeSessions(), Security: newFakeSecurity(), Mail: box,
 		Token: tm, TOTP: totp.NewBox("test-secret"), RefreshTTL: time.Hour, AppURL: "http://app.test",
 	})
-	RegisterRoutes(r, NewUserHandler(users), ledger, reports, share, NewCreditHandler(service.NewCreditService(fl, ledgerSvc)), tm)
+	RegisterRoutes(r, NewUserHandler(users), ledger, reports, share, NewCreditHandler(service.NewCreditService(fl, ledgerSvc)),
+		NewAutomationHandler(service.NewRecurringService(fl, ledgerSvc), service.NewImportService(fl, ledgerSvc)), tm)
 	mailboxes.Store(r, box)
 	return r, repo
 }
