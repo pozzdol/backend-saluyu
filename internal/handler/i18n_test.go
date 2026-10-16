@@ -84,7 +84,7 @@ func TestAccountIconsAndUsage(t *testing.T) {
 		t.Fatalf("uses_30d counts only the last 30 days: makan %v transport %v", by["5102"]["uses_30d"], by["5101"]["uses_30d"])
 	}
 
-	code, body := call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"5108","name":"Kopi","type":"Expense","icon":"coffee","color":"amber"}`)
+	code, body := call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"5109","name":"Kopi","type":"Expense","icon":"coffee","color":"amber"}`)
 	expect(t, "create with icon", code, 201, body)
 	code, body = call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"5109","name":"X","type":"Expense","icon":"rocket"}`)
 	expect(t, "unknown icon", code, 400, body)

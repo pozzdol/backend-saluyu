@@ -58,12 +58,18 @@ var apiErrors = []apiError{
 	{service.ErrContactNotAllowed, http.StatusBadRequest, "contact_not_allowed"},
 	{service.ErrNeedsExpense, http.StatusBadRequest, "needs_expense"},
 	{service.ErrWrongMirror, http.StatusBadRequest, "wrong_mirror"},
+	{service.ErrWrongFee, http.StatusBadRequest, "wrong_fee"},
 	{service.ErrKindChange, http.StatusBadRequest, "kind_change"},
 	// Forms always build balanced entries; only the line editor can send unbalanced ones.
 	{service.ErrUnbalanced, http.StatusBadRequest, "unbalanced"},
 	{service.ErrWrongEditForm, http.StatusBadRequest, "wrong_edit_form"},
 	{service.ErrMirrorLocked, http.StatusConflict, "mirror_locked"},
 	{service.ErrStartAfterEntries, http.StatusConflict, "start_after_entries"},
+
+	{service.ErrNotACard, http.StatusNotFound, "not_a_card"},
+	{service.ErrPlanNotFound, http.StatusNotFound, "plan_not_found"},
+	{service.ErrAlreadyPaid, http.StatusConflict, "already_paid"},
+	{service.ErrPlanHasPayments, http.StatusConflict, "plan_has_payments"},
 
 	{service.ErrInvalidLink, http.StatusBadRequest, "invalid_link"},
 	{service.ErrMFAInvalid, http.StatusUnauthorized, "mfa_expired"},

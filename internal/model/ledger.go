@@ -19,7 +19,13 @@ type Account struct {
 	Icon          string    `json:"icon"`     // lucide icon name, "" = default for the type
 	Color         string    `json:"color"`    // palette token, "" = default for the type
 	Uses30d       int       `json:"uses_30d"` // journal lines in the last 30 days, for "most used first"
+	// Kind is "general", or for liabilities "credit_card", "paylater" (a card with a bill)
+	// or "loan" (an installment plan).
+	Kind string `json:"kind"`
 }
+
+// IsCard reports whether purchases may be charged to this account.
+func (a Account) IsCard() bool { return a.Kind == "credit_card" || a.Kind == "paylater" }
 
 // NormalBalance is the side that increases an account: debit for Asset and Expense, credit for the rest.
 func NormalBalance(accountType string) string {
@@ -52,6 +58,7 @@ var DefaultAccounts = []TemplateAccount{
 	{"5104", "Entertainment", "Expense", "Beban", "clapperboard", "violet"},
 	{"5105", "Keluarga", "Expense", "Beban", "house", "rose"},
 	{"5107", "Admin", "Expense", "Beban", "receipt", "slate"},
+	{"5108", "Bunga & Denda", "Expense", "Beban", "percent", "red"},
 	{"5199", "Beban Tunai Lain-lain", "Expense", "Beban", "coins", "zinc"},
 }
 
@@ -125,6 +132,9 @@ type PostEntryRequest struct {
 	Description   string    `json:"description" binding:"max=200"`
 	// NextPeriod counts an income in the period after entry_date's (salary arriving before payday).
 	NextPeriod bool `json:"next_period"`
+	// Fee and FeeAccountID add a bank charge to a transfer, paid from the same source.
+	Fee          int64      `json:"fee" binding:"gte=0"`
+	FeeAccountID *uuid.UUID `json:"fee_account_id"`
 }
 
 func (r *PostEntryRequest) Normalize() {

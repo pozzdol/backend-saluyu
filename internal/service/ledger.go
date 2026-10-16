@@ -19,6 +19,7 @@ var (
 	ErrAccountInactive   = errors.New("account is inactive")
 	ErrSameAccount       = errors.New("from and to account must differ")
 	ErrWrongAccountType  = errors.New("account type does not fit this kind of transaction")
+	ErrWrongFee          = errors.New("a fee needs a transfer and an expense account")
 	ErrUnbalanced        = errors.New("journal entry is not balanced")
 	ErrOpeningLocked     = repository.ErrOpeningLocked
 	ErrBooksNotEmpty     = repository.ErrBooksNotEmpty
@@ -84,11 +85,31 @@ func (s *LedgerService) UpdateAccount(ctx context.Context, userID, id uuid.UUID,
 	return s.repo.UpdateAccount(ctx, userID, id, req)
 }
 
-// kindRules says which account types a simple form may move money between: [from, to].
-var kindRules = map[string][2]string{
-	"income":   {"Revenue", "Asset"}, // Dr Bank / Cr Gaji
-	"expense":  {"Asset", "Expense"}, // Dr Makan / Cr Bank
-	"transfer": {"Asset", "Asset"},   // Dr Tabungan / Cr Bank
+// fits says whether an account may sit on one side of a simple form. Cards (credit card,
+// paylater) pay for things like a bank account does: the purchase raises the card's debt.
+func fits(kind, side string, a model.Account) bool {
+	money := a.Type == "Asset" || (a.Type == "Liability" && a.IsCard())
+	switch kind + "/" + side {
+	case "income/from":
+		return a.Type == "Revenue" // Dr Bank / Cr Gaji
+	case "income/to":
+		return a.Type == "Asset"
+	case "expense/from":
+		return money // Dr Makan / Cr Bank, or Cr Kartu Kredit
+	case "expense/to":
+		return a.Type == "Expense"
+	case "transfer/from":
+		return money // Bank -> Tabungan, Bank -> Kartu (paying the bill)
+	case "transfer/to":
+		return a.Type == "Asset" || a.Type == "Liability"
+	}
+	return false
+}
+
+var sideWords = map[string][2]string{
+	"income":   {"Revenue", "Asset"},
+	"expense":  {"Asset or card", "Expense"},
+	"transfer": {"Asset or card", "Asset or Liability"},
 }
 
 // PostEntry turns a simple form into a two-line journal entry: money leaves `from` (credit)
@@ -124,9 +145,9 @@ func (s *LedgerService) buildSimple(ctx context.Context, userID uuid.UUID, req m
 	if !okFrom || !okTo {
 		return nil, nil, ErrAccountNotFound
 	}
-	rule := kindRules[req.Kind]
-	if from.Type != rule[0] || to.Type != rule[1] {
-		return nil, nil, fmt.Errorf("%w: %s needs %s -> %s", ErrWrongAccountType, req.Kind, rule[0], rule[1])
+	if !fits(req.Kind, "from", from) || !fits(req.Kind, "to", to) {
+		w := sideWords[req.Kind]
+		return nil, nil, fmt.Errorf("%w: %s needs %s -> %s", ErrWrongAccountType, req.Kind, w[0], w[1])
 	}
 
 	e := &model.Entry{
@@ -137,6 +158,26 @@ func (s *LedgerService) buildSimple(ctx context.Context, userID uuid.UUID, req m
 			{AccountID: to.ID, Debit: req.Amount},
 			{AccountID: from.ID, Credit: req.Amount},
 		},
+	}
+	// A transfer fee is one more expense line, paid from the same source.
+	if req.Fee > 0 {
+		if req.Kind != "transfer" || req.FeeAccountID == nil {
+			return nil, nil, ErrWrongFee
+		}
+		fees, err := s.repo.FindAccounts(ctx, userID, []uuid.UUID{*req.FeeAccountID})
+		if err != nil {
+			return nil, nil, err
+		}
+		fee, ok := fees[*req.FeeAccountID]
+		if !ok || fee.Type != "Expense" {
+			return nil, nil, ErrWrongFee
+		}
+		accounts[fee.ID] = fee
+		e.Lines = []model.Line{
+			{AccountID: to.ID, Debit: req.Amount},
+			{AccountID: fee.ID, Debit: req.Fee},
+			{AccountID: from.ID, Credit: req.Amount + req.Fee},
+		}
 	}
 	// ponytail: next_period is ignored for other kinds; only early salary needs it.
 	if req.NextPeriod && req.Kind == "income" {
@@ -154,6 +195,15 @@ func (s *LedgerService) buildSimple(ctx context.Context, userID uuid.UUID, req m
 // contacts, shared loans) build their own lines and call it too.
 // accounts must contain every account used by the lines, already filtered to this user.
 func (s *LedgerService) post(ctx context.Context, userID uuid.UUID, e *model.Entry, accounts map[uuid.UUID]model.Account) error {
+	if err := s.prepare(ctx, userID, e, accounts); err != nil {
+		return err
+	}
+	return s.repo.CreateEntry(ctx, userID, e)
+}
+
+// prepare runs every check post does, without saving: for callers that store the entry
+// together with other rows in their own transaction.
+func (s *LedgerService) prepare(ctx context.Context, userID uuid.UUID, e *model.Entry, accounts map[uuid.UUID]model.Account) error {
 	// ponytail: start date read outside the insert transaction; the opening can only change
 	// while the books are empty, so the window is a user posting in two tabs during onboarding.
 	start, err := s.repo.StartDate(ctx, userID)
@@ -169,10 +219,7 @@ func (s *LedgerService) post(ctx context.Context, userID uuid.UUID, e *model.Ent
 	if err := validate(e, accounts); err != nil {
 		return err
 	}
-	if err := s.checkContacts(ctx, userID, e); err != nil {
-		return err
-	}
-	return s.repo.CreateEntry(ctx, userID, e)
+	return s.checkContacts(ctx, userID, e)
 }
 
 // checkContacts makes sure every contact on the lines belongs to this user.

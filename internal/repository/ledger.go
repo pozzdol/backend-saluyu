@@ -21,7 +21,7 @@ var (
 	ErrStartAfterEntries = errors.New("the start date is after your first transaction; pick that date or earlier")
 )
 
-const accountColumns = `id, code, name, type, category, normal_balance, is_active, COALESCE(icon, ''), COALESCE(color, '')`
+const accountColumns = `id, code, name, type, category, normal_balance, is_active, COALESCE(icon, ''), COALESCE(color, ''), kind`
 
 type LedgerRepository struct {
 	db *sql.DB
@@ -52,7 +52,7 @@ func scanAccounts(rows *sql.Rows) ([]model.Account, error) {
 	var out []model.Account
 	for rows.Next() {
 		var a model.Account
-		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color); err != nil {
+		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -75,7 +75,7 @@ func (r *LedgerRepository) ListAccounts(ctx context.Context, userID uuid.UUID) (
 	out := []model.Account{}
 	for rows.Next() {
 		var a model.Account
-		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Uses30d); err != nil {
+		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind, &a.Uses30d); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -108,10 +108,10 @@ func (r *LedgerRepository) FindAccounts(ctx context.Context, userID uuid.UUID, i
 
 func (r *LedgerRepository) CreateAccount(ctx context.Context, userID uuid.UUID, a *model.Account) error {
 	err := r.db.QueryRowContext(ctx, `
-	INSERT INTO accounts (user_id, code, name, type, category, normal_balance, icon, color)
-	VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''))
-	RETURNING id, is_active`,
-		userID, a.Code, a.Name, a.Type, a.Category, a.NormalBalance, a.Icon, a.Color).Scan(&a.ID, &a.IsActive)
+	INSERT INTO accounts (user_id, code, name, type, category, normal_balance, icon, color, kind)
+	VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), COALESCE(NULLIF($9, ''), 'general'))
+	RETURNING id, is_active, kind`,
+		userID, a.Code, a.Name, a.Type, a.Category, a.NormalBalance, a.Icon, a.Color, a.Kind).Scan(&a.ID, &a.IsActive, &a.Kind)
 
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -129,7 +129,7 @@ func (r *LedgerRepository) UpdateAccount(ctx context.Context, userID, id uuid.UU
 	    updated_at = now()
 	WHERE id = $1 AND user_id = $2
 	RETURNING `+accountColumns, id, userID, req.Name, req.Category, req.IsActive, req.Icon, req.Color).
-		Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color)
+		Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrAccountNotFound
 	}

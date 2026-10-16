@@ -101,8 +101,8 @@ func TestDashboardAndReports(t *testing.T) {
 	if ts := d["to_savings"].([]any); len(ts) != 1 || ts[0].(map[string]any)["code"] != "1003" {
 		t.Fatalf("to_savings: %v", ts)
 	}
-	if n := len(d["budgets"].([]any)); n != 7 {
-		t.Fatalf("budgets has %d rows, want every active expense account (7)", n)
+	if n := len(d["budgets"].([]any)); n != 8 {
+		t.Fatalf("budgets has %d rows, want every active expense account (8)", n)
 	}
 	m := rowOf(t, d["budgets"], makan)
 	wantNum(t, "makan budget", m, "remaining", 30000000)

@@ -28,6 +28,7 @@ type fakeLedger struct {
 	share    *fakeShare                                 // groups, invites and loan requests
 	revs     map[uuid.UUID][]model.Revision             // entry -> revisions
 	changes  map[uuid.UUID]*fakeChange                  // loan change requests
+	credit   *fakeCredit                                // cards and installment plans
 }
 
 func newFakeLedger() *fakeLedger {
@@ -35,7 +36,7 @@ func newFakeLedger() *fakeLedger {
 		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{},
 		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{},
 		contacts: map[uuid.UUID]map[uuid.UUID]string{}, links: map[uuid.UUID]uuid.UUID{}, share: newFakeShare(),
-		revs: map[uuid.UUID][]model.Revision{}, changes: map[uuid.UUID]*fakeChange{}}
+		revs: map[uuid.UUID][]model.Revision{}, changes: map[uuid.UUID]*fakeChange{}, credit: newFakeCredit()}
 }
 
 func (f *fakeLedger) setPeriodStartDay(userID uuid.UUID, day int) {
@@ -457,12 +458,12 @@ func TestLedgerFlow(t *testing.T) {
 	code, body = call(t, r, "POST", "/api/v1/entries", tok, entryBody("expense", "2026-09-28", 100, bank, makan))
 	expect(t, "expense to inactive account", code, 400, body)
 
-	code, body = call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"5108","name":" Kopi ","type":"Expense"}`)
+	code, body = call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"5109","name":" Kopi ","type":"Expense"}`)
 	expect(t, "create account", code, 201, body)
 	if a := body["data"].(map[string]any); a["name"] != "Kopi" || a["normal_balance"] != "Debit" {
 		t.Fatalf("new account: %v", a)
 	}
-	code, body = call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"5108","name":"Kopi lagi","type":"Expense"}`)
+	code, body = call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"5109","name":"Kopi lagi","type":"Expense"}`)
 	expect(t, "duplicate account code", code, 409, body)
 
 	code, body = call(t, r, "GET", "/api/v1/entries", tok, "")

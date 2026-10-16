@@ -54,7 +54,8 @@ func main() {
 	if err := r.SetTrustedProxies(nil); err != nil {
 		log.Fatal("cannot set trusted proxies:", err)
 	}
-	handler.RegisterRoutes(r, userHandler, ledgerHandler, reportHandler, shareHandler, tokenMaker)
+	creditHandler := handler.NewCreditHandler(service.NewCreditService(ledgerRepo, ledgerSvc))
+	handler.RegisterRoutes(r, userHandler, ledgerHandler, reportHandler, shareHandler, creditHandler, tokenMaker)
 
 	log.Printf("listening on http://localhost%s", cfg.ServerPort)
 	if err := r.Run(cfg.ServerPort); err != nil {
