@@ -101,7 +101,11 @@ func TestClosedBooks(t *testing.T) {
 	_, body := b.r("GET", "/api/v1/entries?kind=expense", "")
 	feb := body["data"].([]any)[0].(map[string]any)["id"].(string)
 
-	code, body := b.r("PUT", "/api/v1/me/lock", `{"locked_until":"2026-02-24"}`)
+	code, body := b.r("PUT", "/api/v1/me/lock", `{"locked_until":"2999-01-01"}`)
+	if code != 400 || body["code"] != "lock_in_future" {
+		t.Fatalf("closing days that have not happened: want 400 lock_in_future, got %d %v", code, body)
+	}
+	code, body = b.r("PUT", "/api/v1/me/lock", `{"locked_until":"2026-02-24"}`)
 	expect(t, "lock", code, 200, body)
 	if body["data"].(map[string]any)["locked_until"] != "2026-02-24" {
 		t.Fatalf("user carries the lock: %v", body)

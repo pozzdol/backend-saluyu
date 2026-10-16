@@ -184,6 +184,10 @@ func (r *LedgerRepository) RespondInvite(ctx context.Context, inviteID, userID u
 	return tx.Commit()
 }
 
+func (r *LedgerRepository) RenameGroup(ctx context.Context, groupID uuid.UUID, name string) error {
+	return expectOne(r.db.ExecContext(ctx, `UPDATE groups SET name = $2 WHERE id = $1`, groupID, name))
+}
+
 func (r *LedgerRepository) LeaveGroup(ctx context.Context, groupID, userID uuid.UUID) error {
 	return expectOne(r.db.ExecContext(ctx, `
 	UPDATE group_members SET status = 'left', left_at = now()

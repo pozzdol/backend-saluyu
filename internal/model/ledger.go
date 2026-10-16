@@ -55,7 +55,7 @@ var DefaultAccounts = []TemplateAccount{
 	{"5101", "Transportasi", "Expense", "Beban", "car", "sky"},
 	{"5102", "Makan", "Expense", "Beban", "utensils", "orange"},
 	{"5103", "Jajan", "Expense", "Beban", "cookie", "pink"},
-	{"5104", "Entertainment", "Expense", "Beban", "clapperboard", "violet"},
+	{"5104", "Hiburan", "Expense", "Beban", "clapperboard", "violet"},
 	{"5105", "Keluarga", "Expense", "Beban", "house", "rose"},
 	{"5107", "Admin", "Expense", "Beban", "receipt", "slate"},
 	{"5108", "Bunga & Denda", "Expense", "Beban", "percent", "red"},

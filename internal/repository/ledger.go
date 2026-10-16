@@ -304,8 +304,7 @@ func (r *LedgerRepository) DeleteEntry(ctx context.Context, userID, id uuid.UUID
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `DELETE FROM journal_entries WHERE id = $1 AND user_id = $2`, id, userID)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+	if blockedByReference(err) {
 		return ErrEntryLocked
 	}
 	if err != nil {

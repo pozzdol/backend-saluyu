@@ -187,6 +187,17 @@ func (f *fakeLedger) RespondInvite(_ context.Context, inviteID, userID uuid.UUID
 	return repository.ErrNotFound
 }
 
+func (f *fakeLedger) RenameGroup(_ context.Context, groupID uuid.UUID, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	g, ok := f.share.groups[groupID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	g.name = name
+	return nil
+}
+
 func (f *fakeLedger) LeaveGroup(_ context.Context, groupID, userID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -393,6 +404,13 @@ func TestGroupAccessAndPrivacy(t *testing.T) {
 	expect(t, "invited but not accepted reads summary", code, 404, body)
 	code, body = call(t, r, "POST", "/api/v1/groups/"+gid+"/invites", budi, `{"email":"budi@x.com"}`)
 	expect(t, "outsider invites into the group", code, 404, body)
+	code, body = call(t, r, "PATCH", "/api/v1/groups/"+gid, budi, `{"name":"Diambil"}`)
+	expect(t, "outsider renames the group", code, 404, body)
+	code, body = call(t, r, "PATCH", "/api/v1/groups/"+gid, lida, `{"name":" Rumah Kita "}`)
+	expect(t, "member renames the group", code, 200, body)
+	if groupOf(t, body)["name"] != "Rumah Kita" {
+		t.Fatalf("renamed group: %v", body)
+	}
 
 	code, body = call(t, r, "GET", "/api/v1/inbox", fikri, "")
 	invites := groupOf(t, body)["invites"].([]any)

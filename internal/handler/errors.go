@@ -50,6 +50,7 @@ var apiErrors = []apiError{
 	{service.ErrWrongAccountType, http.StatusBadRequest, "wrong_account_type"},
 	{service.ErrAccountInactive, http.StatusBadRequest, "account_inactive"},
 	{service.ErrBeforeStart, http.StatusBadRequest, "before_start"},
+	{service.ErrLockInFuture, http.StatusBadRequest, "lock_in_future"},
 	{service.ErrNotBalanceSheet, http.StatusBadRequest, "not_balance_sheet"},
 	{service.ErrNeedsContact, http.StatusBadRequest, "needs_contact"},
 	{service.ErrDuplicateAccount, http.StatusBadRequest, "duplicate_account"},

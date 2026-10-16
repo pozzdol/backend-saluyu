@@ -83,6 +83,23 @@ func (h *ShareHandler) CancelInvite(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func (h *ShareHandler) Rename(c *gin.Context) {
+	groupID, ok := paramID(c, "id")
+	if !ok {
+		return
+	}
+	var req model.GroupRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	g, err := h.svc.RenameGroup(c.Request.Context(), currentClaims(c).UserID, groupID, req)
+	if err != nil {
+		fail(c, "rename group", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": g})
+}
+
 func (h *ShareHandler) Leave(c *gin.Context) {
 	groupID, ok := paramID(c, "id")
 	if !ok {
@@ -188,6 +205,7 @@ func registerShareRoutes(app *gin.RouterGroup, h *ShareHandler) {
 	app.POST("/groups", h.CreateGroup)
 	app.POST("/groups/:id/invites", RateLimit(20, time.Hour), h.Invite)
 	app.DELETE("/groups/:id/invites/:invite_id", h.CancelInvite)
+	app.PATCH("/groups/:id", h.Rename)
 	app.POST("/groups/:id/leave", h.Leave)
 	app.GET("/groups/:id/summary", h.Summary)
 	app.GET("/inbox", h.Inbox)

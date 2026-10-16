@@ -96,10 +96,16 @@ func (r *LedgerRepository) RenameContact(ctx context.Context, userID, id uuid.UU
 	return nil
 }
 
+// blockedByReference reports a delete stopped by a foreign key: ON DELETE RESTRICT raises
+// 23001 (restrict_violation), NO ACTION 23503 (foreign_key_violation).
+func blockedByReference(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && (pgErr.Code == "23001" || pgErr.Code == "23503")
+}
+
 func (r *LedgerRepository) DeleteContact(ctx context.Context, userID, id uuid.UUID) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM contacts WHERE id = $1 AND user_id = $2`, id, userID)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23503" { // journal_lines still point at it
+	if blockedByReference(err) { // journal_lines still point at it
 		return ErrContactHasHistory
 	}
 	if err != nil {

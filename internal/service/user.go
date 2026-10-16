@@ -26,6 +26,8 @@ var (
 	ErrSessionExpired     = errors.New("session expired, please log in again")
 	// validation counts characters, bcrypt counts bytes: 72 multi-byte characters can still be too long.
 	ErrPasswordTooLong = bcrypt.ErrPasswordTooLong
+	// Closing days that have not happened yet would block recording today.
+	ErrLockInFuture = errors.New("the books can only be closed up to today")
 )
 
 // dummyHash is compared against when the email does not exist, so a login for an
@@ -281,6 +283,10 @@ func (s *UserService) SetLock(ctx context.Context, claims *token.Claims, req mod
 	}
 	var until *time.Time
 	if req.LockedUntil != nil {
+		// ponytail: +14h covers the furthest time zone ahead of UTC; per-user zones would be exact.
+		if *req.LockedUntil > time.Now().UTC().Add(14*time.Hour).Format(time.DateOnly) {
+			return nil, ErrLockInFuture
+		}
 		d, _ := time.Parse(time.DateOnly, *req.LockedUntil) // format checked by binding
 		until = &d
 	}

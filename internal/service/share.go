@@ -35,6 +35,7 @@ type ShareRepository interface {
 	InvitesForEmail(ctx context.Context, email string) ([]model.InboxInvite, error)
 	RespondInvite(ctx context.Context, inviteID, userID uuid.UUID, email string, accept bool) error
 	LeaveGroup(ctx context.Context, groupID, userID uuid.UUID) error
+	RenameGroup(ctx context.Context, groupID uuid.UUID, name string) error
 	LinkContact(ctx context.Context, userID, contactID uuid.UUID, linked *uuid.UUID) error
 	PendingLoans(ctx context.Context, userID uuid.UUID) ([]model.InboxLoan, error)
 	LoanSource(ctx context.Context, requestID, userID uuid.UUID) (*model.LoanSource, error)
@@ -129,6 +130,17 @@ func (s *ShareService) Inbox(ctx context.Context, claims *token.Claims) (*model.
 // RespondInvite only works on invites sent to the caller's own email.
 func (s *ShareService) RespondInvite(ctx context.Context, claims *token.Claims, inviteID uuid.UUID, accept bool) error {
 	return s.repo.RespondInvite(ctx, inviteID, claims.UserID, claims.Email, accept)
+}
+
+// RenameGroup lets any active member change the name everyone sees.
+func (s *ShareService) RenameGroup(ctx context.Context, userID, groupID uuid.UUID, req model.GroupRequest) (*model.Group, error) {
+	if err := s.member(ctx, groupID, userID); err != nil {
+		return nil, err
+	}
+	if err := s.repo.RenameGroup(ctx, groupID, req.Name); err != nil {
+		return nil, err
+	}
+	return s.group(ctx, userID, groupID)
 }
 
 // LeaveGroup takes effect at once: summaries are checked against active membership on every request.
