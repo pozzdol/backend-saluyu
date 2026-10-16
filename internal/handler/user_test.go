@@ -155,9 +155,12 @@ func newTestServer() (*gin.Engine, *fakeRepo) {
 	r := gin.New()
 	fl := newFakeLedger()
 	repo.ledger = fl
-	ledger := NewLedgerHandler(service.NewLedgerService(fl))
-	reports := NewReportHandler(service.NewReportService(fl))
-	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), ledger, reports, tm)
+	fl.share.users = repo
+	ledgerSvc, reportSvc := service.NewLedgerService(fl), service.NewReportService(fl)
+	ledger := NewLedgerHandler(ledgerSvc)
+	reports := NewReportHandler(reportSvc)
+	share := NewShareHandler(service.NewShareService(fl, ledgerSvc, reportSvc))
+	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), ledger, reports, share, tm)
 	return r, repo
 }
 

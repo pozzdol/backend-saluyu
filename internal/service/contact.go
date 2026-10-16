@@ -151,6 +151,16 @@ func (s *LedgerService) PostLoan(ctx context.Context, userID uuid.UUID, req mode
 	if err != nil {
 		return nil, err
 	}
+	// A linked contact gets a mirror request, which is only allowed while we share a group.
+	if c.LinkedUserID != nil {
+		ok, err := s.repo.SharesActiveGroup(ctx, userID, *c.LinkedUserID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, ErrNotShared
+		}
+	}
 	codes, err := s.byCode(ctx, userID)
 	if err != nil {
 		return nil, err

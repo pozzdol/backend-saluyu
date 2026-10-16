@@ -24,6 +24,9 @@ func (f *fakeLedger) ListContacts(_ context.Context, userID uuid.UUID, only *uui
 			continue
 		}
 		c := model.Contact{ID: id, Name: name}
+		if linked, ok := f.links[id]; ok {
+			c.LinkedUserID = &linked
+		}
 		for _, e := range f.entries[userID] {
 			for _, l := range e.Lines {
 				if l.ContactID == nil || *l.ContactID != id {

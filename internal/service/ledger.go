@@ -47,6 +47,7 @@ type LedgerRepository interface {
 	RenameContact(ctx context.Context, userID, id uuid.UUID, name string) error
 	DeleteContact(ctx context.Context, userID, id uuid.UUID) error
 	ContactHistory(ctx context.Context, userID, contactID uuid.UUID) ([]model.ContactLine, error)
+	SharesActiveGroup(ctx context.Context, a, b uuid.UUID) (bool, error)
 }
 
 type LedgerService struct {

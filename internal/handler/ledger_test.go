@@ -24,13 +24,15 @@ type fakeLedger struct {
 	startDay map[uuid.UUID]int                          // user -> period_start_day; missing = 25, the column default
 	budgets  map[uuid.UUID][]model.Budget               // user -> budgets, unique per (account, period start)
 	contacts map[uuid.UUID]map[uuid.UUID]string         // user -> contact id -> name
+	links    map[uuid.UUID]uuid.UUID                    // contact id -> linked user id
+	share    *fakeShare                                 // groups, invites and loan requests
 }
 
 func newFakeLedger() *fakeLedger {
 	return &fakeLedger{accounts: map[uuid.UUID]map[uuid.UUID]*model.Account{},
 		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{},
 		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{},
-		contacts: map[uuid.UUID]map[uuid.UUID]string{}}
+		contacts: map[uuid.UUID]map[uuid.UUID]string{}, links: map[uuid.UUID]uuid.UUID{}, share: newFakeShare()}
 }
 
 func (f *fakeLedger) setPeriodStartDay(userID uuid.UUID, day int) {
@@ -238,6 +240,7 @@ func (f *fakeLedger) CreateEntry(_ context.Context, userID uuid.UUID, e *model.E
 	defer f.mu.Unlock()
 	e.ID, e.EntryNo, e.CreatedAt = uuid.New(), int64(len(f.entries[userID])+1), time.Now()
 	f.entries[userID] = append(f.entries[userID], e)
+	f.createLoanRequest(userID, e)
 	return nil
 }
 
@@ -245,13 +248,23 @@ func (f *fakeLedger) DeleteEntry(_ context.Context, userID, id uuid.UUID) error 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i, e := range f.entries[userID] {
-		if e.ID == id && e.Kind == "opening" {
+		if e.ID != id {
+			continue
+		}
+		if e.Kind == "opening" {
 			return repository.ErrOpeningLocked
 		}
-		if e.ID == id {
-			f.entries[userID] = append(f.entries[userID][:i], f.entries[userID][i+1:]...)
-			return nil
+		// Like the RESTRICT foreign keys: an approved request pins both entries.
+		for rid, q := range f.share.requests {
+			if q.status == "approved" && (q.fromEntry == id || q.toEntry == id) {
+				return repository.ErrEntryLocked
+			}
+			if q.fromEntry == id {
+				delete(f.share.requests, rid)
+			}
 		}
+		f.entries[userID] = append(f.entries[userID][:i], f.entries[userID][i+1:]...)
+		return nil
 	}
 	return repository.ErrEntryNotFound
 }

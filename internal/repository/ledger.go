@@ -136,6 +136,9 @@ func (r *LedgerRepository) CreateEntry(ctx context.Context, userID uuid.UUID, e 
 	if err := insertEntry(ctx, tx, userID, e); err != nil {
 		return err
 	}
+	if err := createLoanRequest(ctx, tx, e); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -236,8 +239,27 @@ func (r *LedgerRepository) DeleteEntry(ctx context.Context, userID, id uuid.UUID
 	if kind == "opening" {
 		return ErrOpeningLocked
 	}
-	_, err = r.db.ExecContext(ctx, `DELETE FROM journal_entries WHERE id = $1 AND user_id = $2`, id, userID)
-	return err
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// A request the other member has not approved goes with the entry. An approved one
+	// (from_entry_id or to_entry_id) is RESTRICT: both books hold the loan, so neither side
+	// may drop it alone.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM loan_requests WHERE from_entry_id = $1 AND status <> 'approved'`, id); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM journal_entries WHERE id = $1 AND user_id = $2`, id, userID)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return ErrEntryLocked
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListEntries returns one page of entries (newest first) with their lines, plus the total match count.
