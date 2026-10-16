@@ -10,6 +10,12 @@ import (
 
 var ErrInvalidToken = errors.New("invalid token")
 
+func init() {
+	// Millisecond iat, not whole seconds: a password changed in the same second as a login
+	// must still revoke that login's token. Fractional NumericDate is allowed by RFC 7519.
+	jwt.TimePrecision = time.Millisecond
+}
+
 type Claims struct {
 	UserID uuid.UUID `json:"user_id"`
 	Email  string    `json:"email"`

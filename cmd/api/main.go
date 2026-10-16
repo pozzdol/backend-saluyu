@@ -24,23 +24,19 @@ func main() {
 
 	log.Println("successfully connect to database")
 
-	r := gin.Default()
-
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
-
 	tokenMaker := token.NewMaker(cfg.JWTSecret, cfg.JWTDuration)
 
 	userRepo := repository.NewUserRepository(db)
 	userSvc := service.NewUserService(userRepo, tokenMaker)
 	userHandler := handler.NewUserHandler(userSvc)
 
-	api := r.Group("/api/v1")
-	{
-		api.POST("/register", userHandler.Register)
-		api.POST("/login", userHandler.Login)
+	r := gin.Default()
+	// Trust no proxy headers: otherwise a client can fake X-Forwarded-For and bypass the rate limit.
+	// Set the real proxy IPs here when running behind nginx or a load balancer.
+	if err := r.SetTrustedProxies(nil); err != nil {
+		log.Fatal("cannot set trusted proxies:", err)
 	}
+	handler.RegisterRoutes(r, userHandler, tokenMaker)
 
 	log.Printf("listening on http://localhost%s", cfg.ServerPort)
 	if err := r.Run(cfg.ServerPort); err != nil {
