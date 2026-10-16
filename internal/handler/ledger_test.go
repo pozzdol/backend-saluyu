@@ -352,11 +352,14 @@ func (f *fakeLedger) TrialBalanceTotals(_ context.Context, userID uuid.UUID, _ t
 	return out, nil
 }
 
-// signUp registers and logs in a user and returns their access token.
+// signUp registers a user, verifies the email through the emailed link, logs in and
+// returns the access token.
 func signUp(t *testing.T, r *gin.Engine, email string) string {
 	t.Helper()
 	call(t, r, "POST", "/api/v1/register", "", `{"name":"Lida","email":"`+email+`","password":"secret123"}`)
-	code, body := call(t, r, "POST", "/api/v1/login", "", `{"email":"`+email+`","password":"secret123"}`)
+	code, body := call(t, r, "POST", "/api/v1/email/verify", "", `{"token":"`+linkToken(t, r, email, "/verify-email")+`"}`)
+	expect(t, "verify "+email, code, 204, body)
+	code, body = call(t, r, "POST", "/api/v1/login", "", `{"email":"`+email+`","password":"secret123"}`)
 	expect(t, "login "+email, code, 200, body)
 	return body["access_token"].(string)
 }

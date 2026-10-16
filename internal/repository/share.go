@@ -131,6 +131,8 @@ func (r *LedgerRepository) InvitesForEmail(ctx context.Context, email string) ([
 	SELECT i.id, g.id, g.name, u.name, i.created_at
 	FROM group_invites i JOIN groups g ON g.id = i.group_id JOIN users u ON u.id = i.invited_by
 	WHERE i.email = $1
+	  -- Invites match by email, so only a proven owner of that inbox may see them.
+	  AND EXISTS (SELECT 1 FROM users me WHERE lower(me.email) = lower($1) AND me.email_verified_at IS NOT NULL)
 	ORDER BY i.created_at`, email)
 	if err != nil {
 		return nil, err
@@ -154,6 +156,14 @@ func (r *LedgerRepository) RespondInvite(ctx context.Context, inviteID, userID u
 		return err
 	}
 	defer tx.Rollback()
+
+	var verified bool
+	if err := tx.QueryRowContext(ctx, `SELECT email_verified_at IS NOT NULL FROM users WHERE id = $1`, userID).Scan(&verified); err != nil {
+		return err
+	}
+	if !verified {
+		return ErrEmailUnverified
+	}
 
 	var groupID uuid.UUID
 	err = tx.QueryRowContext(ctx, `DELETE FROM group_invites WHERE id = $1 AND email = $2 RETURNING group_id`, inviteID, email).Scan(&groupID)

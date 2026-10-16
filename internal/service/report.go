@@ -14,6 +14,7 @@ var ErrNotExpenseAccount = errors.New("budgets are only for expense accounts")
 
 // ReportRepository is what reports need from storage. *repository.LedgerRepository implements it.
 type ReportRepository interface {
+	Exporter
 	ListAccounts(ctx context.Context, userID uuid.UUID) ([]model.Account, error)
 	FindAccounts(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]model.Account, error)
 	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"net/http"
 	"time"
 
@@ -100,4 +101,18 @@ func (h *ReportHandler) BalanceSheet(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": bs})
+}
+
+// Export downloads all of the user's data as a ZIP. It is built in memory first, so a
+// failure is a JSON error instead of a broken half-sent file.
+// ponytail: in memory; stream it if books grow past tens of megabytes.
+func (h *ReportHandler) Export(c *gin.Context) {
+	var buf bytes.Buffer
+	if err := h.svc.Export(c.Request.Context(), currentClaims(c).UserID, &buf); err != nil {
+		fail(c, "export", err)
+		return
+	}
+	name := "saluyu-" + time.Now().Format(time.DateOnly) + ".zip"
+	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	c.Data(http.StatusOK, "application/zip", buf.Bytes())
 }

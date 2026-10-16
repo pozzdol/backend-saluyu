@@ -101,3 +101,10 @@ type Budget struct {
 	PeriodStart time.Time
 	Amount      int64
 }
+
+// ExportTable is one CSV file of the data download: a header and text cells.
+type ExportTable struct {
+	Name    string
+	Columns []string
+	Rows    [][]string
+}

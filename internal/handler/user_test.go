@@ -16,13 +16,15 @@ import (
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 	"github.com/pozzdol/backend-saluyu/internal/service"
 	"github.com/pozzdol/backend-saluyu/internal/token"
+	"github.com/pozzdol/backend-saluyu/internal/totp"
 )
 
 // fakeRepo is an in-memory service.UserRepository with the same unique-email rule as the DB.
 type fakeRepo struct {
 	mu     sync.Mutex
 	users  map[uuid.UUID]*model.User
-	ledger *fakeLedger // start_date lives on users in the real DB; the fake ledger owns it here
+	steps  map[uuid.UUID]int64 // totp_last_step
+	ledger *fakeLedger         // start_date lives on users in the real DB; the fake ledger owns it here
 }
 
 func (f *fakeRepo) Create(_ context.Context, u *model.User) error {
@@ -109,57 +111,52 @@ func (f *fakeRepo) UpdatePassword(_ context.Context, id uuid.UUID, hash string, 
 	return nil
 }
 
-// fakeSessions is an in-memory service.SessionRepository with the same rules as the SQL one.
-type fakeSessions struct {
-	mu   sync.Mutex
-	rows map[string]*fakeSession
-}
-
-type fakeSession struct {
-	userID  uuid.UUID
-	expires time.Time
-	revoked bool
-}
-
-func (f *fakeSessions) Create(_ context.Context, userID uuid.UUID, hash []byte, expiresAt time.Time) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.rows[string(hash)] = &fakeSession{userID: userID, expires: expiresAt}
-	return nil
-}
-
-func (f *fakeSessions) Consume(_ context.Context, hash []byte) (uuid.UUID, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	row, ok := f.rows[string(hash)]
-	switch {
-	case !ok:
-		return uuid.Nil, repository.ErrRefreshNotFound
-	case row.revoked:
-		return row.userID, repository.ErrRefreshReused
-	case time.Now().After(row.expires):
-		return uuid.Nil, repository.ErrRefreshNotFound
-	}
-	row.revoked = true
-	return row.userID, nil
-}
-
-func (f *fakeSessions) RevokeAll(_ context.Context, userID uuid.UUID) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, row := range f.rows {
-		if row.userID == userID {
-			row.revoked = true
+func (f *fakeRepo) SetEmailVerified(_ context.Context, id uuid.UUID) error {
+	return f.edit(id, func(u *model.User) {
+		if u.EmailVerifiedAt == nil {
+			now := time.Now()
+			u.EmailVerifiedAt = &now
 		}
+	})
+}
+
+func (f *fakeRepo) RevokeTokensBefore(_ context.Context, id uuid.UUID, t time.Time) error {
+	return f.edit(id, func(u *model.User) { u.SessionsRevokedAt = &t })
+}
+
+func (f *fakeRepo) SetTOTP(_ context.Context, id uuid.UUID, secret []byte, enabledAt *time.Time, lastStep int64) error {
+	return f.edit(id, func(u *model.User) {
+		u.TOTPSecret, u.TOTPEnabledAt = secret, enabledAt
+		f.steps[id] = lastStep
+	})
+}
+
+func (f *fakeRepo) UseTOTPStep(_ context.Context, id uuid.UUID, step int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.steps[id] >= step {
+		return false, nil
 	}
+	f.steps[id] = step
+	return true, nil
+}
+
+func (f *fakeRepo) edit(id uuid.UUID, change func(*model.User)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.users[id]
+	if !ok {
+		return repository.ErrUserNotFound
+	}
+	change(u)
 	return nil
 }
 
 func newTestServer() (*gin.Engine, *fakeRepo) {
 	gin.SetMode(gin.TestMode)
-	repo := &fakeRepo{users: map[uuid.UUID]*model.User{}}
-	sessions := &fakeSessions{rows: map[string]*fakeSession{}}
+	repo := &fakeRepo{users: map[uuid.UUID]*model.User{}, steps: map[uuid.UUID]int64{}}
 	tm := token.NewMaker("test-secret", time.Minute)
+	box := &fakeMail{}
 	r := gin.New()
 	fl := newFakeLedger()
 	repo.ledger = fl
@@ -168,7 +165,12 @@ func newTestServer() (*gin.Engine, *fakeRepo) {
 	ledger := NewLedgerHandler(ledgerSvc)
 	reports := NewReportHandler(reportSvc)
 	share := NewShareHandler(service.NewShareService(fl, ledgerSvc, reportSvc))
-	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), ledger, reports, share, tm)
+	users := service.NewUserService(service.UserDeps{
+		Users: repo, Sessions: newFakeSessions(), Security: newFakeSecurity(), Mail: box,
+		Token: tm, TOTP: totp.NewBox("test-secret"), RefreshTTL: time.Hour, AppURL: "http://app.test",
+	})
+	RegisterRoutes(r, NewUserHandler(users), ledger, reports, share, tm)
+	mailboxes.Store(r, box)
 	return r, repo
 }
 

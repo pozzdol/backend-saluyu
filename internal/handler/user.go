@@ -22,7 +22,7 @@ func (h *UserHandler) Register(c *gin.Context) {
 		return
 	}
 
-	user, err := h.svc.Register(c.Request.Context(), req)
+	user, err := h.svc.Register(c.Request.Context(), req, lang(c))
 	if err != nil {
 		fail(c, "register", err)
 		return
@@ -37,9 +37,13 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	session, err := h.svc.Login(c.Request.Context(), req)
+	session, err := h.svc.Login(c.Request.Context(), req, c.Request.UserAgent())
 	if err != nil {
 		fail(c, "login", err)
+		return
+	}
+	if session.MFARequired { // no session yet: the code comes next, at /login/totp
+		c.JSON(http.StatusOK, session)
 		return
 	}
 
@@ -54,7 +58,7 @@ func (h *UserHandler) Refresh(c *gin.Context) {
 		return
 	}
 
-	session, err := h.svc.Refresh(c.Request.Context(), raw)
+	session, err := h.svc.Refresh(c.Request.Context(), raw, c.Request.UserAgent())
 	if err != nil {
 		clearRefreshCookie(c)
 		fail(c, "refresh session", err)
@@ -108,7 +112,7 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
-	session, err := h.svc.ChangePassword(c.Request.Context(), currentClaims(c), req)
+	session, err := h.svc.ChangePassword(c.Request.Context(), currentClaims(c), req, c.Request.UserAgent())
 	if err != nil {
 		fail(c, "change password", err)
 		return

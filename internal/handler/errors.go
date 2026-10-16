@@ -64,6 +64,14 @@ var apiErrors = []apiError{
 	{service.ErrWrongEditForm, http.StatusBadRequest, "wrong_edit_form"},
 	{service.ErrMirrorLocked, http.StatusConflict, "mirror_locked"},
 	{service.ErrStartAfterEntries, http.StatusConflict, "start_after_entries"},
+
+	{service.ErrInvalidLink, http.StatusBadRequest, "invalid_link"},
+	{service.ErrMFAInvalid, http.StatusUnauthorized, "mfa_expired"},
+	{service.ErrInvalidCode, http.StatusBadRequest, "invalid_code"},
+	{service.ErrTOTPNotSetup, http.StatusConflict, "totp_not_setup"},
+	{service.ErrTOTPAlreadyEnabled, http.StatusConflict, "totp_already_enabled"},
+	{service.ErrSessionNotFound, http.StatusNotFound, "session_not_found"},
+	{service.ErrEmailUnverified, http.StatusForbidden, "email_unverified"},
 }
 
 // fail maps service errors to HTTP responses in one place.

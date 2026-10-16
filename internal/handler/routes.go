@@ -17,15 +17,28 @@ func RegisterRoutes(r *gin.Engine, users *UserHandler, ledger *LedgerHandler, re
 	// Each route gets its own limiter so register traffic cannot lock out login.
 	api.POST("/register", RateLimit(10, time.Minute), users.Register)
 	api.POST("/login", RateLimit(10, time.Minute), users.Login)
+	api.POST("/login/totp", RateLimit(10, time.Minute), users.LoginTOTP)
+	api.POST("/password/forgot", RateLimit(5, time.Minute), users.ForgotPassword)
+	api.POST("/password/reset", RateLimit(10, time.Minute), users.ResetPassword)
+	api.POST("/email/verify", RateLimit(10, time.Minute), users.VerifyEmail)
 
 	auth := api.Group("/auth")
 	auth.POST("/refresh", RateLimit(60, time.Minute), users.Refresh)
 	auth.POST("/logout", users.Logout)
+	// Under /auth so the refresh cookie comes along and marks the current session.
+	auth.GET("/sessions", Auth(tm), users.ListSessions)
+	auth.DELETE("/sessions/:id", Auth(tm), users.EndSession)
+	auth.POST("/sessions/revoke-others", Auth(tm), users.RevokeOtherSessions)
 
 	me := api.Group("/me", Auth(tm))
 	me.GET("", users.Me)
 	me.PATCH("", users.UpdateProfile)
 	me.PUT("/password", RateLimit(10, time.Minute), users.ChangePassword)
+	me.POST("/email/verification", RateLimit(3, time.Minute), users.ResendVerification)
+	me.GET("/export", RateLimit(10, time.Minute), reports.Export)
+	me.POST("/totp/setup", users.SetupTOTP)
+	me.POST("/totp/enable", RateLimit(10, time.Minute), users.EnableTOTP)
+	me.POST("/totp/disable", RateLimit(10, time.Minute), users.DisableTOTP)
 
 	app := api.Group("", Auth(tm))
 	app.GET("/accounts", ledger.ListAccounts)

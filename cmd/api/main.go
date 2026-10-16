@@ -7,9 +7,11 @@ import (
 	"github.com/pozzdol/backend-saluyu/internal/config"
 	"github.com/pozzdol/backend-saluyu/internal/database"
 	"github.com/pozzdol/backend-saluyu/internal/handler"
+	"github.com/pozzdol/backend-saluyu/internal/mail"
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 	"github.com/pozzdol/backend-saluyu/internal/service"
 	"github.com/pozzdol/backend-saluyu/internal/token"
+	"github.com/pozzdol/backend-saluyu/internal/totp"
 )
 
 func main() {
@@ -28,7 +30,16 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db)
-	userSvc := service.NewUserService(userRepo, sessionRepo, tokenMaker, cfg.RefreshDuration)
+	userSvc := service.NewUserService(service.UserDeps{
+		Users:      userRepo,
+		Sessions:   sessionRepo,
+		Security:   repository.NewSecurityRepository(db),
+		Mail:       mail.New(cfg.ResendAPIKey, cfg.MailFrom),
+		Token:      tokenMaker,
+		TOTP:       totp.NewBox(cfg.JWTSecret),
+		RefreshTTL: cfg.RefreshDuration,
+		AppURL:     cfg.AppURL,
+	})
 	userHandler := handler.NewUserHandler(userSvc)
 	ledgerRepo := repository.NewLedgerRepository(db)
 	ledgerSvc := service.NewLedgerService(ledgerRepo)

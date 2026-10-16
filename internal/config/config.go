@@ -15,6 +15,11 @@ type Config struct {
 	JWTDuration time.Duration
 	// RefreshDuration is how long a login lasts without activity; JWTDuration should stay short.
 	RefreshDuration time.Duration
+	// ResendAPIKey is optional: without it emails are printed to the log.
+	ResendAPIKey string
+	MailFrom     string
+	// AppURL is the frontend origin that links in emails point to.
+	AppURL string
 }
 
 func Load() *Config {
@@ -28,6 +33,9 @@ func Load() *Config {
 		JWTSecret:       mustEnv("JWT_SECRET"),
 		JWTDuration:     getDuration("JWT_DURATION", "15m"),
 		RefreshDuration: getDuration("REFRESH_DURATION", "720h"),
+		ResendAPIKey:    os.Getenv("RESEND_API_KEY"),
+		MailFrom:        getEnv("MAIL_FROM", "Saluyu <noreply@fikriachmad.dev>"),
+		AppURL:          getEnv("APP_URL", "http://localhost:5173"),
 	}
 }
 

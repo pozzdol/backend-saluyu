@@ -45,6 +45,18 @@ func (s *fakeShare) user(id uuid.UUID) model.User {
 	return *s.users.users[id]
 }
 
+// verified mirrors the SQL rule: invites to an email show only once its owner verified it.
+func (s *fakeShare) verified(email string) bool {
+	s.users.mu.Lock()
+	defer s.users.mu.Unlock()
+	for _, u := range s.users.users {
+		if u.Email == email && u.EmailVerifiedAt != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *fakeLedger) shares(a, b uuid.UUID) bool {
 	for _, g := range f.share.groups {
 		if g.members[a] == "active" && g.members[b] == "active" {
@@ -141,6 +153,9 @@ func (f *fakeLedger) InvitesForEmail(_ context.Context, email string) ([]model.I
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []model.InboxInvite{}
+	if !f.share.verified(email) {
+		return out, nil
+	}
 	for gid, g := range f.share.groups {
 		for _, inv := range g.invites {
 			if inv.Email == email {
@@ -155,6 +170,9 @@ func (f *fakeLedger) InvitesForEmail(_ context.Context, email string) ([]model.I
 func (f *fakeLedger) RespondInvite(_ context.Context, inviteID, userID uuid.UUID, email string, accept bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.share.user(userID).EmailVerifiedAt == nil {
+		return repository.ErrEmailUnverified
+	}
 	for _, g := range f.share.groups {
 		for i, inv := range g.invites {
 			if inv.ID == inviteID && inv.Email == email {

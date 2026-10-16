@@ -21,7 +21,7 @@ func Auth(tm *token.Maker) gin.HandlerFunc {
 		}
 
 		claims, err := tm.Verify(raw)
-		if err != nil {
+		if err != nil || claims.Purpose != "" { // an mfa ticket is not an access token
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}

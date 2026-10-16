@@ -16,7 +16,7 @@ var (
 	ErrEmailTaken   = errors.New("email already taken")
 )
 
-const userColumns = `id, name, email, password, img_url, is_active, password_changed_at, start_date, period_start_day, locale, created_at, updated_at`
+const userColumns = `id, name, email, password, img_url, is_active, password_changed_at, start_date, period_start_day, locale, email_verified_at, sessions_revoked_at, totp_secret, totp_enabled_at, created_at, updated_at`
 
 type UserRepository struct {
 	db *sql.DB
@@ -80,6 +80,10 @@ func scanUser(row *sql.Row) (*model.User, error) {
 		&user.StartDate,
 		&user.PeriodStartDay,
 		&user.Locale,
+		&user.EmailVerifiedAt,
+		&user.SessionsRevokedAt,
+		&user.TOTPSecret,
+		&user.TOTPEnabledAt,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)
@@ -115,4 +119,32 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, id uuid.UUID, hash 
 		return ErrUserNotFound
 	}
 	return nil
+}
+
+func (r *UserRepository) SetEmailVerified(ctx context.Context, id uuid.UUID) error {
+	return expectOne(r.db.ExecContext(ctx,
+		`UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()) WHERE id = $1`, id))
+}
+
+// RevokeTokensBefore makes every access token issued before t invalid at /me.
+func (r *UserRepository) RevokeTokensBefore(ctx context.Context, id uuid.UUID, t time.Time) error {
+	return expectOne(r.db.ExecContext(ctx, `UPDATE users SET sessions_revoked_at = $2 WHERE id = $1`, id, t))
+}
+
+// SetTOTP stores a new encrypted secret (enabledAt nil = waiting for the first code),
+// or clears 2FA when secret is nil. lastStep is the step of the code that enabled it.
+func (r *UserRepository) SetTOTP(ctx context.Context, id uuid.UUID, secret []byte, enabledAt *time.Time, lastStep int64) error {
+	return expectOne(r.db.ExecContext(ctx,
+		`UPDATE users SET totp_secret = $2, totp_enabled_at = $3, totp_last_step = $4 WHERE id = $1`, id, secret, enabledAt, lastStep))
+}
+
+// UseTOTPStep records that the code for this time step was used. It returns false when this
+// step or a later one was already used, so a code cannot be replayed.
+func (r *UserRepository) UseTOTPStep(ctx context.Context, id uuid.UUID, step int64) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE users SET totp_last_step = $2 WHERE id = $1 AND totp_last_step < $2`, id, step)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
