@@ -27,7 +27,8 @@ func main() {
 	tokenMaker := token.NewMaker(cfg.JWTSecret, cfg.JWTDuration)
 
 	userRepo := repository.NewUserRepository(db)
-	userSvc := service.NewUserService(userRepo, tokenMaker)
+	sessionRepo := repository.NewSessionRepository(db)
+	userSvc := service.NewUserService(userRepo, sessionRepo, tokenMaker, cfg.RefreshDuration)
 	userHandler := handler.NewUserHandler(userSvc)
 
 	r := gin.Default()

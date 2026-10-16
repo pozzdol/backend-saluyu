@@ -18,6 +18,10 @@ func RegisterRoutes(r *gin.Engine, users *UserHandler, tm *token.Maker) {
 	api.POST("/register", RateLimit(10, time.Minute), users.Register)
 	api.POST("/login", RateLimit(10, time.Minute), users.Login)
 
+	auth := api.Group("/auth")
+	auth.POST("/refresh", RateLimit(60, time.Minute), users.Refresh)
+	auth.POST("/logout", users.Logout)
+
 	me := api.Group("/me", Auth(tm))
 	me.GET("", users.Me)
 	me.PATCH("", users.UpdateProfile)

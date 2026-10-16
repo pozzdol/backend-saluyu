@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -89,13 +90,83 @@ func (f *fakeRepo) UpdatePassword(_ context.Context, id uuid.UUID, hash string, 
 	return nil
 }
 
+// fakeSessions is an in-memory service.SessionRepository with the same rules as the SQL one.
+type fakeSessions struct {
+	mu   sync.Mutex
+	rows map[string]*fakeSession
+}
+
+type fakeSession struct {
+	userID  uuid.UUID
+	expires time.Time
+	revoked bool
+}
+
+func (f *fakeSessions) Create(_ context.Context, userID uuid.UUID, hash []byte, expiresAt time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rows[string(hash)] = &fakeSession{userID: userID, expires: expiresAt}
+	return nil
+}
+
+func (f *fakeSessions) Consume(_ context.Context, hash []byte) (uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.rows[string(hash)]
+	switch {
+	case !ok:
+		return uuid.Nil, repository.ErrRefreshNotFound
+	case row.revoked:
+		return row.userID, repository.ErrRefreshReused
+	case time.Now().After(row.expires):
+		return uuid.Nil, repository.ErrRefreshNotFound
+	}
+	row.revoked = true
+	return row.userID, nil
+}
+
+func (f *fakeSessions) RevokeAll(_ context.Context, userID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.rows {
+		if row.userID == userID {
+			row.revoked = true
+		}
+	}
+	return nil
+}
+
 func newTestServer() (*gin.Engine, *fakeRepo) {
 	gin.SetMode(gin.TestMode)
 	repo := &fakeRepo{users: map[uuid.UUID]*model.User{}}
+	sessions := &fakeSessions{rows: map[string]*fakeSession{}}
 	tm := token.NewMaker("test-secret", time.Minute)
 	r := gin.New()
-	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, tm)), tm)
+	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), tm)
 	return r, repo
+}
+
+// refresh posts to /auth/refresh with the given cookie value and returns the status,
+// body and the rotated cookie value ("" when none was set).
+func refresh(t *testing.T, r *gin.Engine, cookie string) (int, map[string]any, string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/v1/auth/refresh", nil)
+	req.AddCookie(&http.Cookie{Name: refreshCookie, Value: cookie})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var out map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	return w.Code, out, cookieValue(w.Result().Cookies())
+}
+
+func cookieValue(cookies []*http.Cookie) string {
+	for _, c := range cookies {
+		if c.Name == refreshCookie {
+			return c.Value
+		}
+	}
+	return ""
 }
 
 // call sends a JSON request and returns the status code and decoded body.
@@ -150,7 +221,7 @@ func TestUserFlow(t *testing.T) {
 
 	code, body = call(t, r, "POST", "/api/v1/login", "", `{"email":"BUDI@X.COM","password":"secret123"}`)
 	expect(t, "login", code, 200, body)
-	tok := body["token"].(string)
+	tok := body["access_token"].(string)
 
 	code, body = call(t, r, "GET", "/api/v1/me", "", "")
 	expect(t, "me without token", code, 401, body)
@@ -174,7 +245,7 @@ func TestUserFlow(t *testing.T) {
 	expect(t, "change password wrong old", code, 400, body)
 	code, body = call(t, r, "PUT", "/api/v1/me/password", tok, `{"old_password":"secret123","new_password":"newsecret"}`)
 	expect(t, "change password", code, 200, body)
-	newTok, _ := body["token"].(string)
+	newTok, _ := body["access_token"].(string)
 	code, body = call(t, r, "GET", "/api/v1/me", tok, "")
 	expect(t, "me with token from before password change", code, 401, body)
 	code, body = call(t, r, "GET", "/api/v1/me", newTok, "")
@@ -209,4 +280,49 @@ func TestLoginRateLimit(t *testing.T) {
 	}
 	code, body := call(t, r, "POST", "/api/v1/login", "", `{bad`)
 	expect(t, "request over limit", code, 429, body)
+}
+
+func TestRefreshRotationAndLogout(t *testing.T) {
+	r, _ := newTestServer()
+	call(t, r, "POST", "/api/v1/register", "", `{"name":"Budi","email":"b@x.com","password":"secret123"}`)
+
+	req := httptest.NewRequest("POST", "/api/v1/login", strings.NewReader(`{"email":"b@x.com","password":"secret123"}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	expect(t, "login", w.Code, 200, nil)
+	first := w.Result().Cookies()[0]
+	if !first.HttpOnly || !first.Secure || first.SameSite != http.SameSiteStrictMode || first.Path != "/api/v1/auth" {
+		t.Fatalf("refresh cookie is not locked down: %+v", first)
+	}
+	if strings.Contains(w.Body.String(), first.Value) {
+		t.Fatal("refresh token leaked into the JSON body")
+	}
+
+	code, body, second := refresh(t, r, first.Value)
+	expect(t, "refresh", code, 200, body)
+	if second == "" || second == first.Value {
+		t.Fatalf("refresh did not rotate the cookie")
+	}
+	code, body = call(t, r, "GET", "/api/v1/me", body["access_token"].(string), "")
+	expect(t, "me with refreshed access token", code, 200, body)
+
+	code, body, _ = refresh(t, r, first.Value)
+	expect(t, "reuse rotated token", code, 401, body)
+	code, body, _ = refresh(t, r, second)
+	expect(t, "newest token after reuse was detected", code, 401, body)
+
+	code, body, _ = refresh(t, r, "garbage")
+	expect(t, "unknown token", code, 401, body)
+
+	// Fresh login, then logout must kill that refresh token.
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/login", strings.NewReader(`{"email":"b@x.com","password":"secret123"}`)))
+	third := cookieValue(w.Result().Cookies())
+	req = httptest.NewRequest("POST", "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: refreshCookie, Value: third})
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	expect(t, "logout", w.Code, 204, nil)
+	code, body, _ = refresh(t, r, third)
+	expect(t, "refresh after logout", code, 401, body)
 }

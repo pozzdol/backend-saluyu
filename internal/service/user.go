@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"time"
 
@@ -19,6 +21,7 @@ var (
 	ErrUserInactive       = errors.New("user is inactive")
 	ErrWrongPassword      = errors.New("old password is incorrect")
 	ErrTokenRevoked       = errors.New("token revoked, please log in again")
+	ErrSessionExpired     = errors.New("session expired, please log in again")
 	// validation counts characters, bcrypt counts bytes: 72 multi-byte characters can still be too long.
 	ErrPasswordTooLong = bcrypt.ErrPasswordTooLong
 )
@@ -37,13 +40,22 @@ type UserRepository interface {
 	UpdatePassword(ctx context.Context, id uuid.UUID, hash string, changedAt time.Time) error
 }
 
-type UserService struct {
-	repo  UserRepository
-	token *token.Maker
+// SessionRepository stores refresh tokens. *repository.SessionRepository implements it.
+type SessionRepository interface {
+	Create(ctx context.Context, userID uuid.UUID, hash []byte, expiresAt time.Time) error
+	Consume(ctx context.Context, hash []byte) (uuid.UUID, error)
+	RevokeAll(ctx context.Context, userID uuid.UUID) error
 }
 
-func NewUserService(repo UserRepository, tm *token.Maker) *UserService {
-	return &UserService{repo: repo, token: tm}
+type UserService struct {
+	repo       UserRepository
+	sessions   SessionRepository
+	token      *token.Maker
+	refreshTTL time.Duration
+}
+
+func NewUserService(repo UserRepository, sessions SessionRepository, tm *token.Maker, refreshTTL time.Duration) *UserService {
+	return &UserService{repo: repo, sessions: sessions, token: tm, refreshTTL: refreshTTL}
 }
 
 func (s *UserService) Register(ctx context.Context, req model.RegisterRequest) (*model.User, error) {
@@ -69,7 +81,7 @@ func (s *UserService) Register(ctx context.Context, req model.RegisterRequest) (
 	return user, nil
 }
 
-func (s *UserService) Login(ctx context.Context, req model.LoginRequest) (*model.LoginResponse, error) {
+func (s *UserService) Login(ctx context.Context, req model.LoginRequest) (*model.Session, error) {
 	user, err := s.repo.FindByEmail(ctx, req.Email)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
@@ -88,15 +100,70 @@ func (s *UserService) Login(ctx context.Context, req model.LoginRequest) (*model
 		return nil, ErrUserInactive
 	}
 
-	signed, err := s.token.Create(user.ID, user.Email)
+	return s.startSession(ctx, user)
+}
+
+// Refresh trades a refresh token for a new access token and a new refresh token (rotation).
+func (s *UserService) Refresh(ctx context.Context, refreshToken string) (*model.Session, error) {
+	userID, err := s.sessions.Consume(ctx, hashToken(refreshToken))
+	switch {
+	case errors.Is(err, repository.ErrRefreshReused):
+		// A rotated token came back, so someone else holds a copy. End every session of this user.
+		if err := s.sessions.RevokeAll(ctx, userID); err != nil {
+			return nil, err
+		}
+		return nil, ErrSessionExpired
+	case errors.Is(err, repository.ErrRefreshNotFound):
+		return nil, ErrSessionExpired
+	case err != nil:
+		return nil, err
+	}
+
+	user, err := s.repo.FindByID(ctx, userID)
+	if errors.Is(err, repository.ErrUserNotFound) {
+		return nil, ErrSessionExpired
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !user.IsActive {
+		return nil, ErrUserInactive
+	}
+	return s.startSession(ctx, user)
+}
+
+// Logout revokes the refresh token. An unknown or already revoked token is not an error.
+func (s *UserService) Logout(ctx context.Context, refreshToken string) error {
+	_, err := s.sessions.Consume(ctx, hashToken(refreshToken))
+	if errors.Is(err, repository.ErrRefreshNotFound) || errors.Is(err, repository.ErrRefreshReused) {
+		return nil
+	}
+	return err
+}
+
+func (s *UserService) startSession(ctx context.Context, user *model.User) (*model.Session, error) {
+	access, err := s.token.Create(user.ID, user.Email)
 	if err != nil {
 		return nil, err
 	}
 
-	return &model.LoginResponse{
-		Token: signed,
-		User:  model.ToUserResponse(user),
+	refresh := rand.Text() // 128 random bits
+	expires := time.Now().Add(s.refreshTTL)
+	if err := s.sessions.Create(ctx, user.ID, hashToken(refresh), expires); err != nil {
+		return nil, err
+	}
+
+	return &model.Session{
+		AccessToken:    access,
+		User:           model.ToUserResponse(user),
+		RefreshToken:   refresh,
+		RefreshExpires: expires,
 	}, nil
+}
+
+func hashToken(t string) []byte {
+	h := sha256.Sum256([]byte(t))
+	return h[:]
 }
 
 // Me returns the logged-in user. A token stays valid until it expires, so every request
@@ -123,25 +190,29 @@ func (s *UserService) UpdateProfile(ctx context.Context, claims *token.Claims, r
 	return s.repo.Update(ctx, claims.UserID, req.Name, req.Image)
 }
 
-// ChangePassword revokes every token issued before now and returns a fresh one for the caller.
-func (s *UserService) ChangePassword(ctx context.Context, claims *token.Claims, req model.ChangePasswordRequest) (string, error) {
+// ChangePassword logs out every device and returns a fresh session for the caller.
+func (s *UserService) ChangePassword(ctx context.Context, claims *token.Claims, req model.ChangePasswordRequest) (*model.Session, error) {
 	user, err := s.Me(ctx, claims)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.OldPassword)); err != nil {
-		return "", ErrWrongPassword
+		return nil, ErrWrongPassword
 	}
 
 	hashed, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
+	// password_changed_at revokes old access tokens, RevokeAll old refresh tokens.
 	if err := s.repo.UpdatePassword(ctx, user.ID, string(hashed), time.Now()); err != nil {
-		return "", err
+		return nil, err
+	}
+	if err := s.sessions.RevokeAll(ctx, user.ID); err != nil {
+		return nil, err
 	}
 	// Created after the change, so its iat is not before password_changed_at.
-	return s.token.Create(user.ID, user.Email)
+	return s.startSession(ctx, user)
 }

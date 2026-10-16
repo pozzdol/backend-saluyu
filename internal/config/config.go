@@ -13,6 +13,8 @@ type Config struct {
 	ServerPort  string
 	JWTSecret   string
 	JWTDuration time.Duration
+	// RefreshDuration is how long a login lasts without activity; JWTDuration should stay short.
+	RefreshDuration time.Duration
 }
 
 func Load() *Config {
@@ -20,16 +22,12 @@ func Load() *Config {
 		log.Printf("error load env: %v", err)
 	}
 
-	duration, err := time.ParseDuration(getEnv("JWT_DURATION", "24h"))
-	if err != nil {
-		log.Fatalf("invalid JWT_DURATION: %v", err)
-	}
-
 	return &Config{
-		DBSource:    mustEnv("DB_SOURCE"),
-		ServerPort:  getEnv("SERVER_PORT", ":12152"),
-		JWTSecret:   mustEnv("JWT_SECRET"),
-		JWTDuration: duration,
+		DBSource:        mustEnv("DB_SOURCE"),
+		ServerPort:      getEnv("SERVER_PORT", ":12152"),
+		JWTSecret:       mustEnv("JWT_SECRET"),
+		JWTDuration:     getDuration("JWT_DURATION", "15m"),
+		RefreshDuration: getDuration("REFRESH_DURATION", "720h"),
 	}
 }
 
@@ -46,4 +44,12 @@ func mustEnv(key string) string {
 		log.Fatalf("%s is required", key)
 	}
 	return value
+}
+
+func getDuration(key, fallback string) time.Duration {
+	d, err := time.ParseDuration(getEnv(key, fallback))
+	if err != nil {
+		log.Fatalf("invalid %s: %v", key, err)
+	}
+	return d
 }

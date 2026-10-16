@@ -39,13 +39,44 @@ func (h *UserHandler) Login(c *gin.Context) {
 		return
 	}
 
-	res, err := h.svc.Login(c.Request.Context(), req)
+	session, err := h.svc.Login(c.Request.Context(), req)
 	if err != nil {
 		fail(c, "login", err)
 		return
 	}
 
-	c.JSON(http.StatusOK, res)
+	setRefreshCookie(c, session)
+	c.JSON(http.StatusOK, session)
+}
+
+func (h *UserHandler) Refresh(c *gin.Context) {
+	raw, err := c.Cookie(refreshCookie)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing refresh token"})
+		return
+	}
+
+	session, err := h.svc.Refresh(c.Request.Context(), raw)
+	if err != nil {
+		clearRefreshCookie(c)
+		fail(c, "refresh session", err)
+		return
+	}
+
+	setRefreshCookie(c, session)
+	c.JSON(http.StatusOK, session)
+}
+
+func (h *UserHandler) Logout(c *gin.Context) {
+	if raw, err := c.Cookie(refreshCookie); err == nil {
+		if err := h.svc.Logout(c.Request.Context(), raw); err != nil {
+			fail(c, "logout", err)
+			return
+		}
+	}
+
+	clearRefreshCookie(c)
+	c.Status(http.StatusNoContent)
 }
 
 func (h *UserHandler) Me(c *gin.Context) {
@@ -79,14 +110,15 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
-	tok, err := h.svc.ChangePassword(c.Request.Context(), currentClaims(c), req)
+	session, err := h.svc.ChangePassword(c.Request.Context(), currentClaims(c), req)
 	if err != nil {
 		fail(c, "change password", err)
 		return
 	}
 
-	// Old tokens are now revoked; this device keeps working with the new one.
-	c.JSON(http.StatusOK, gin.H{"message": "password updated", "token": tok})
+	// Every other device is logged out; this one keeps working with the new session.
+	setRefreshCookie(c, session)
+	c.JSON(http.StatusOK, gin.H{"message": "password updated", "access_token": session.AccessToken})
 }
 
 // fail maps service errors to HTTP status codes in one place.
@@ -95,7 +127,8 @@ func fail(c *gin.Context, op string, err error) {
 	switch {
 	case errors.Is(err, service.ErrEmailTaken):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrInvalidCredentials), errors.Is(err, service.ErrTokenRevoked):
+	case errors.Is(err, service.ErrInvalidCredentials), errors.Is(err, service.ErrTokenRevoked),
+		errors.Is(err, service.ErrSessionExpired):
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrUserInactive):
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})

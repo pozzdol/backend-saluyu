@@ -75,9 +75,13 @@ type UserResponse struct {
 	IsActive bool      `json:"is_active"`
 }
 
-type LoginResponse struct {
-	Token string       `json:"token"`
-	User  UserResponse `json:"user"`
+// Session is what login and refresh hand out. The refresh token never goes in the JSON body:
+// the handler puts it in an HttpOnly cookie that page scripts cannot read.
+type Session struct {
+	AccessToken    string       `json:"access_token"`
+	User           UserResponse `json:"user"`
+	RefreshToken   string       `json:"-"`
+	RefreshExpires time.Time    `json:"-"`
 }
 
 func ToUserResponse(u *User) UserResponse {
