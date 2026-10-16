@@ -122,3 +122,16 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 	setRefreshCookie(c, session)
 	c.JSON(http.StatusOK, gin.H{"message": "password updated", "access_token": session.AccessToken})
 }
+
+func (h *UserHandler) SetLock(c *gin.Context) {
+	var req model.LockRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	user, err := h.svc.SetLock(c.Request.Context(), currentClaims(c), req)
+	if err != nil {
+		fail(c, "set lock", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": model.ToUserResponse(user)})
+}

@@ -168,6 +168,13 @@ func (s *LedgerService) SetOpening(ctx context.Context, userID uuid.UUID, req mo
 	if err != nil {
 		return nil, err
 	}
+	dates := []time.Time{start}
+	if current.Entry != nil {
+		dates = append(dates, current.Entry.EntryDate)
+	}
+	if err := s.checkLock(ctx, userID, dates...); err != nil {
+		return nil, err
+	}
 	if err := s.repo.ReplaceOpening(ctx, userID, start, current.Entry, e); err != nil {
 		return nil, err
 	}

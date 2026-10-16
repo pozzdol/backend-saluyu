@@ -16,7 +16,7 @@ var (
 	ErrEmailTaken   = errors.New("email already taken")
 )
 
-const userColumns = `id, name, email, password, img_url, is_active, password_changed_at, start_date, period_start_day, locale, email_verified_at, sessions_revoked_at, totp_secret, totp_enabled_at, created_at, updated_at`
+const userColumns = `id, name, email, password, img_url, is_active, password_changed_at, start_date, period_start_day, locale, email_verified_at, sessions_revoked_at, totp_secret, totp_enabled_at, locked_until, created_at, updated_at`
 
 type UserRepository struct {
 	db *sql.DB
@@ -84,6 +84,7 @@ func scanUser(row *sql.Row) (*model.User, error) {
 		&user.SessionsRevokedAt,
 		&user.TOTPSecret,
 		&user.TOTPEnabledAt,
+		&user.LockedUntil,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)
@@ -147,4 +148,8 @@ func (r *UserRepository) UseTOTPStep(ctx context.Context, id uuid.UUID, step int
 	}
 	n, err := res.RowsAffected()
 	return n == 1, err
+}
+
+func (r *UserRepository) SetLock(ctx context.Context, id uuid.UUID, until *time.Time) error {
+	return expectOne(r.db.ExecContext(ctx, `UPDATE users SET locked_until = $2 WHERE id = $1`, id, until))
 }

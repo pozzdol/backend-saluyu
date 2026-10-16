@@ -80,6 +80,10 @@ var apiErrors = []apiError{
 	{service.ErrNoColumns, http.StatusBadRequest, "no_columns"},
 	{service.ErrImportAccount, http.StatusBadRequest, "import_account"},
 
+	{service.ErrGoalNotFound, http.StatusNotFound, "goal_not_found"},
+	{service.ErrInvalidInvite, http.StatusBadRequest, "invalid_invite"},
+	{service.ErrAlreadyInGroup, http.StatusConflict, "already_in_group"},
+	{service.ErrPeriodLocked, http.StatusConflict, "period_locked"},
 	{service.ErrUnknownReport, http.StatusBadRequest, "unknown_report"},
 
 	{service.ErrInvalidLink, http.StatusBadRequest, "invalid_link"},

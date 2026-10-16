@@ -191,6 +191,8 @@ func registerShareRoutes(app *gin.RouterGroup, h *ShareHandler) {
 	app.POST("/groups/:id/leave", h.Leave)
 	app.GET("/groups/:id/summary", h.Summary)
 	app.GET("/inbox", h.Inbox)
+	app.POST("/groups/:id/invite-links", RateLimit(20, time.Hour), h.CreateInviteLink)
+	app.POST("/invite-links/accept", RateLimit(20, time.Minute), h.AcceptInviteLink)
 	app.POST("/invites/:id/accept", h.respond(true))
 	app.POST("/invites/:id/reject", h.respond(false))
 	app.PUT("/contacts/:id/link", h.LinkContact)

@@ -16,6 +16,7 @@ var (
 	ErrAccountNotFound   = errors.New("account not found")
 	ErrAccountCodeTaken  = errors.New("account code already used")
 	ErrEntryNotFound     = errors.New("entry not found")
+	ErrDuplicateClient   = errors.New("an entry with this client id exists")
 	ErrOpeningLocked     = errors.New("the opening entry can only be changed on the opening balance page")
 	ErrBooksNotEmpty     = errors.New("opening balance can only change before other transactions exist")
 	ErrStartAfterEntries = errors.New("the start date is after your first transaction; pick that date or earlier")
@@ -168,10 +169,14 @@ func lockUser(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
 
 func insertEntry(ctx context.Context, tx *sql.Tx, userID uuid.UUID, e *model.Entry) error {
 	err := tx.QueryRowContext(ctx, `
-	INSERT INTO journal_entries (user_id, entry_no, entry_date, kind, description, period_date)
-	VALUES ($1, (SELECT COALESCE(MAX(entry_no), 0) + 1 FROM journal_entries WHERE user_id = $1), $2, $3, $4, $5)
+	INSERT INTO journal_entries (user_id, entry_no, entry_date, kind, description, period_date, client_id)
+	VALUES ($1, (SELECT COALESCE(MAX(entry_no), 0) + 1 FROM journal_entries WHERE user_id = $1), $2, $3, $4, $5, $6)
 	RETURNING id, entry_no, created_at`,
-		userID, e.EntryDate, e.Kind, e.Description, e.PeriodDate).Scan(&e.ID, &e.EntryNo, &e.CreatedAt)
+		userID, e.EntryDate, e.Kind, e.Description, e.PeriodDate, e.ClientID).Scan(&e.ID, &e.EntryNo, &e.CreatedAt)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "journal_entries_client_idx" {
+		return ErrDuplicateClient
+	}
 	if err != nil {
 		return err
 	}
@@ -235,6 +240,26 @@ func (r *LedgerRepository) ReplaceOpening(ctx context.Context, userID uuid.UUID,
 func (r *LedgerRepository) StartDate(ctx context.Context, userID uuid.UUID) (*time.Time, error) {
 	var d *time.Time
 	err := r.db.QueryRowContext(ctx, `SELECT start_date FROM users WHERE id = $1`, userID).Scan(&d)
+	return d, err
+}
+
+// EntryByClientID finds the entry a client already sent with this id.
+func (r *LedgerRepository) EntryByClientID(ctx context.Context, userID, clientID uuid.UUID) (*model.Entry, error) {
+	var id uuid.UUID
+	err := r.db.QueryRowContext(ctx, `SELECT id FROM journal_entries WHERE user_id = $1 AND client_id = $2`, userID, clientID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrEntryNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.GetEntry(ctx, userID, id)
+}
+
+// LockedUntil is the last day of the closed books, or nil when nothing is closed.
+func (r *LedgerRepository) LockedUntil(ctx context.Context, userID uuid.UUID) (*time.Time, error) {
+	var d *time.Time
+	err := r.db.QueryRowContext(ctx, `SELECT locked_until FROM users WHERE id = $1`, userID).Scan(&d)
 	return d, err
 }
 

@@ -355,3 +355,18 @@ func TestRefreshRotationAndLogout(t *testing.T) {
 	code, body, _ = refresh(t, r, third)
 	expect(t, "refresh after logout", code, 401, body)
 }
+
+// SetLock keeps the date where the fake ledger reads it, like the one users column does.
+func (f *fakeRepo) SetLock(_ context.Context, id uuid.UUID, until *time.Time) error {
+	if err := f.edit(id, func(u *model.User) { u.LockedUntil = until }); err != nil {
+		return err
+	}
+	f.ledger.mu.Lock()
+	defer f.ledger.mu.Unlock()
+	if until == nil {
+		delete(f.ledger.locked, id)
+	} else {
+		f.ledger.locked[id] = *until
+	}
+	return nil
+}

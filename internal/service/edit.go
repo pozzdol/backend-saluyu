@@ -99,6 +99,10 @@ func (s *LedgerService) EditLines(ctx context.Context, userID, id uuid.UUID, req
 // validation, same contact ownership check. A loan the other member already mirrored is not
 // changed here: the edit becomes a proposal they approve or reject.
 func (s *LedgerService) replace(ctx context.Context, userID uuid.UUID, before, next *model.Entry, accounts map[uuid.UUID]model.Account) (*EditResult, error) {
+	// Neither the old date nor the new one may be in closed books.
+	if err := s.checkLock(ctx, userID, before.EntryDate, next.EntryDate); err != nil {
+		return nil, err
+	}
 	start, err := s.repo.StartDate(ctx, userID)
 	if err != nil {
 		return nil, err

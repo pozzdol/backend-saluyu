@@ -29,6 +29,16 @@ type fakeLedger struct {
 	revs     map[uuid.UUID][]model.Revision             // entry -> revisions
 	changes  map[uuid.UUID]*fakeChange                  // loan change requests
 	credit   *fakeCredit                                // cards and installment plans
+	locked   map[uuid.UUID]time.Time                    // user -> locked_until
+}
+
+func (f *fakeLedger) LockedUntil(_ context.Context, userID uuid.UUID) (*time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d, ok := f.locked[userID]; ok {
+		return &d, nil
+	}
+	return nil, nil
 }
 
 func newFakeLedger() *fakeLedger {
@@ -36,7 +46,7 @@ func newFakeLedger() *fakeLedger {
 		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{},
 		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{},
 		contacts: map[uuid.UUID]map[uuid.UUID]string{}, links: map[uuid.UUID]uuid.UUID{}, share: newFakeShare(),
-		revs: map[uuid.UUID][]model.Revision{}, changes: map[uuid.UUID]*fakeChange{}, credit: newFakeCredit()}
+		revs: map[uuid.UUID][]model.Revision{}, changes: map[uuid.UUID]*fakeChange{}, credit: newFakeCredit(), locked: map[uuid.UUID]time.Time{}}
 }
 
 func (f *fakeLedger) setPeriodStartDay(userID uuid.UUID, day int) {
@@ -264,6 +274,13 @@ func (f *fakeLedger) UpdateAccount(_ context.Context, userID, id uuid.UUID, req 
 func (f *fakeLedger) CreateEntry(_ context.Context, userID uuid.UUID, e *model.Entry) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if e.ClientID != nil {
+		for _, other := range f.entries[userID] {
+			if other.ClientID != nil && *other.ClientID == *e.ClientID {
+				return repository.ErrDuplicateClient // the unique index
+			}
+		}
+	}
 	e.ID, e.EntryNo, e.CreatedAt = uuid.New(), int64(len(f.entries[userID])+1), time.Now()
 	f.entries[userID] = append(f.entries[userID], e)
 	f.createLoanRequest(userID, e)
@@ -585,4 +602,16 @@ func TestOpeningAndCashCount(t *testing.T) {
 	code, body = call(t, r, "POST", "/api/v1/reconciliations", tok, fmt.Sprintf(
 		`{"account_id":%q,"date":"2026-10-16","actual":1,"counter_account_id":%q}`, bank, cash))
 	expect(t, "reconcile against an asset", code, 400, body)
+}
+
+func (f *fakeLedger) EntryByClientID(_ context.Context, userID, clientID uuid.UUID) (*model.Entry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.entries[userID] {
+		if e.ClientID != nil && *e.ClientID == clientID {
+			copied := *e
+			return &copied, nil
+		}
+	}
+	return nil, repository.ErrEntryNotFound
 }

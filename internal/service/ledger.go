@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ var (
 	ErrSameAccount       = errors.New("from and to account must differ")
 	ErrWrongAccountType  = errors.New("account type does not fit this kind of transaction")
 	ErrWrongFee          = errors.New("a fee needs a transfer and an expense account")
+	ErrPeriodLocked      = errors.New("the books are closed for this date")
 	ErrUnbalanced        = errors.New("journal entry is not balanced")
 	ErrOpeningLocked     = repository.ErrOpeningLocked
 	ErrBooksNotEmpty     = repository.ErrBooksNotEmpty
@@ -30,6 +32,11 @@ var (
 
 // LedgerRepository is what the ledger needs from storage. *repository.LedgerRepository implements it.
 type LedgerRepository interface {
+	LockedUntil(ctx context.Context, userID uuid.UUID) (*time.Time, error)
+	EntryByClientID(ctx context.Context, userID, clientID uuid.UUID) (*model.Entry, error)
+	Goals(ctx context.Context, userID uuid.UUID) ([]model.Goal, error)
+	SaveGoal(ctx context.Context, g *model.Goal) error
+	DeleteGoal(ctx context.Context, userID, id uuid.UUID) error
 	ListAccounts(ctx context.Context, userID uuid.UUID) ([]model.Account, error)
 	FindAccounts(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]model.Account, error)
 	CreateAccount(ctx context.Context, userID uuid.UUID, a *model.Account) error
@@ -115,8 +122,73 @@ var sideWords = map[string][2]string{
 // PostEntry turns a simple form into a two-line journal entry: money leaves `from` (credit)
 // and arrives in `to` (debit). Refunds are income to 4003 Pengembalian, so no form ever
 // credits an expense account and expense balances cannot go negative.
+//
+// With a client id, sending the same entry again returns the first one: the offline queue
+// retries until it hears back, and the unique index settles two sends that race.
 func (s *LedgerService) PostEntry(ctx context.Context, userID uuid.UUID, req model.PostEntryRequest) (*model.Entry, error) {
+	if req.ClientID != nil {
+		if e, err := s.repo.EntryByClientID(ctx, userID, *req.ClientID); err == nil {
+			return e, nil
+		} else if !errors.Is(err, repository.ErrEntryNotFound) {
+			return nil, err
+		}
+	}
 	e, accounts, err := s.buildSimple(ctx, userID, req)
+	if err != nil {
+		return nil, err
+	}
+	e.ClientID = req.ClientID
+	err = s.post(ctx, userID, e, accounts)
+	if errors.Is(err, repository.ErrDuplicateClient) {
+		return s.repo.EntryByClientID(ctx, userID, *req.ClientID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// PostJournal records a manual multi-line entry (an adjustment), for corrections the forms
+// cannot express.
+func (s *LedgerService) PostJournal(ctx context.Context, userID uuid.UUID, req model.LinesRequest) (*model.Entry, error) {
+	date, err := time.Parse(time.DateOnly, req.EntryDate)
+	if err != nil {
+		return nil, err
+	}
+	e := &model.Entry{EntryDate: date, Kind: "adjustment", Description: req.Description}
+	ids := make([]uuid.UUID, 0, len(req.Lines))
+	for _, l := range req.Lines {
+		e.Lines = append(e.Lines, model.Line{AccountID: l.AccountID, ContactID: l.ContactID, Debit: l.Debit, Credit: l.Credit})
+		ids = append(ids, l.AccountID)
+	}
+	accounts, err := s.repo.FindAccounts(ctx, userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.post(ctx, userID, e, accounts); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// Reverse posts the mirror image of an entry (debits and credits swapped) on another day,
+// which is how a mistake in closed books gets corrected.
+func (s *LedgerService) Reverse(ctx context.Context, userID, id uuid.UUID, date time.Time) (*model.Entry, error) {
+	orig, err := s.repo.GetEntry(ctx, userID, id)
+	if err != nil {
+		return nil, err
+	}
+	if orig.Kind == "opening" {
+		return nil, ErrOpeningLocked
+	}
+	e := &model.Entry{EntryDate: date, Kind: "adjustment", Description: fmt.Sprintf("Pembalik #%d %s", orig.EntryNo, orig.Description)}
+	ids := make([]uuid.UUID, 0, len(orig.Lines))
+	for _, l := range orig.Lines {
+		e.Lines = append(e.Lines, model.Line{AccountID: l.AccountID, ContactID: l.ContactID, Debit: l.Credit, Credit: l.Debit})
+		ids = append(ids, l.AccountID)
+	}
+	e.Description = strings.TrimSpace(e.Description)
+	accounts, err := s.repo.FindAccounts(ctx, userID, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -201,9 +273,26 @@ func (s *LedgerService) post(ctx context.Context, userID uuid.UUID, e *model.Ent
 	return s.repo.CreateEntry(ctx, userID, e)
 }
 
+// checkLock refuses any of the dates that fall in closed books (on or before locked_until).
+func (s *LedgerService) checkLock(ctx context.Context, userID uuid.UUID, dates ...time.Time) error {
+	locked, err := s.repo.LockedUntil(ctx, userID)
+	if err != nil || locked == nil {
+		return err
+	}
+	for _, d := range dates {
+		if !d.After(*locked) {
+			return fmt.Errorf("%w (closed until %s)", ErrPeriodLocked, locked.Format(time.DateOnly))
+		}
+	}
+	return nil
+}
+
 // prepare runs every check post does, without saving: for callers that store the entry
 // together with other rows in their own transaction.
 func (s *LedgerService) prepare(ctx context.Context, userID uuid.UUID, e *model.Entry, accounts map[uuid.UUID]model.Account) error {
+	if err := s.checkLock(ctx, userID, e.EntryDate); err != nil {
+		return err
+	}
 	// ponytail: start date read outside the insert transaction; the opening can only change
 	// while the books are empty, so the window is a user posting in two tabs during onboarding.
 	start, err := s.repo.StartDate(ctx, userID)
@@ -284,6 +373,13 @@ func (s *LedgerService) ListEntries(ctx context.Context, userID uuid.UUID, f mod
 }
 
 func (s *LedgerService) DeleteEntry(ctx context.Context, userID, id uuid.UUID) error {
+	e, err := s.repo.GetEntry(ctx, userID, id)
+	if err != nil {
+		return err
+	}
+	if err := s.checkLock(ctx, userID, e.EntryDate); err != nil {
+		return err
+	}
 	return s.repo.DeleteEntry(ctx, userID, id)
 }
 

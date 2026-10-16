@@ -119,6 +119,8 @@ type Entry struct {
 	Description   string     `json:"description"`
 	CreatedAt     time.Time  `json:"created_at"`
 	Lines         []Line     `json:"lines"`
+	// ClientID is chosen by a client that may send the same entry twice (an offline queue).
+	ClientID *uuid.UUID `json:"client_id,omitempty"`
 }
 
 // PostEntryRequest is the simple form: money moves from one account to another.
@@ -135,6 +137,13 @@ type PostEntryRequest struct {
 	// Fee and FeeAccountID add a bank charge to a transfer, paid from the same source.
 	Fee          int64      `json:"fee" binding:"gte=0"`
 	FeeAccountID *uuid.UUID `json:"fee_account_id"`
+	// ClientID makes retries safe: the same id posts one entry and returns it after that.
+	ClientID *uuid.UUID `json:"client_id"`
+}
+
+// ReverseRequest dates a reversing entry (default: today).
+type ReverseRequest struct {
+	EntryDate string `json:"entry_date" binding:"omitempty,datetime=2006-01-02"`
 }
 
 func (r *PostEntryRequest) Normalize() {

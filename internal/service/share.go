@@ -23,6 +23,8 @@ var (
 
 // ShareRepository is what groups and shared loans need from storage.
 type ShareRepository interface {
+	CreateInviteLink(ctx context.Context, groupID, by uuid.UUID, hash []byte, expires time.Time) error
+	AcceptInviteLink(ctx context.Context, hash []byte, userID uuid.UUID) (uuid.UUID, error)
 	CreateGroup(ctx context.Context, userID uuid.UUID, name string) (uuid.UUID, error)
 	ListGroups(ctx context.Context, userID uuid.UUID) ([]model.Group, error)
 	IsActiveMember(ctx context.Context, groupID, userID uuid.UUID) (bool, error)
@@ -285,6 +287,9 @@ func (s *ShareService) Approve(ctx context.Context, userID, requestID uuid.UUID,
 	if err := validate(e, accounts); err != nil {
 		return uuid.Nil, fmt.Errorf("mirror entry: %w", err)
 	}
+	if err := s.ledger.checkLock(ctx, userID, e.EntryDate); err != nil {
+		return uuid.Nil, err
+	}
 	return s.repo.ApproveLoan(ctx, requestID, userID, e)
 }
 
@@ -362,6 +367,13 @@ func (s *ShareService) ApproveChange(ctx context.Context, userID, changeID uuid.
 	}
 	if err := s.validateFor(ctx, userID, mirrorAfter); err != nil {
 		return fmt.Errorf("mirror entry: %w", err)
+	}
+	// Both books change: neither side's closed period may be touched.
+	if err := s.ledger.checkLock(ctx, userID, mirrorBefore.EntryDate, mirrorAfter.EntryDate); err != nil {
+		return err
+	}
+	if err := s.ledger.checkLock(ctx, src.FromUserID, senderBefore.EntryDate, senderAfter.EntryDate); err != nil {
+		return err
 	}
 	return s.repo.ApplyChange(ctx, changeID, userID, src.FromUserID, senderBefore, senderAfter, mirrorBefore, mirrorAfter)
 }

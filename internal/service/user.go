@@ -44,6 +44,7 @@ type UserRepository interface {
 	RevokeTokensBefore(ctx context.Context, id uuid.UUID, t time.Time) error
 	SetTOTP(ctx context.Context, id uuid.UUID, secret []byte, enabledAt *time.Time, lastStep int64) error
 	UseTOTPStep(ctx context.Context, id uuid.UUID, step int64) (bool, error)
+	SetLock(ctx context.Context, id uuid.UUID, until *time.Time) error
 }
 
 // SessionRepository stores refresh tokens. *repository.SessionRepository implements it.
@@ -271,4 +272,20 @@ func (s *UserService) ChangePassword(ctx context.Context, claims *token.Claims, 
 	}
 	// Created after the change, so its iat is not before password_changed_at.
 	return s.startSession(ctx, user, uuid.Nil, userAgent)
+}
+
+// SetLock closes the books up to and including a day (nil reopens everything).
+func (s *UserService) SetLock(ctx context.Context, claims *token.Claims, req model.LockRequest) (*model.User, error) {
+	if _, err := s.Me(ctx, claims); err != nil {
+		return nil, err
+	}
+	var until *time.Time
+	if req.LockedUntil != nil {
+		d, _ := time.Parse(time.DateOnly, *req.LockedUntil) // format checked by binding
+		until = &d
+	}
+	if err := s.repo.SetLock(ctx, claims.UserID, until); err != nil {
+		return nil, err
+	}
+	return s.Me(ctx, claims)
 }

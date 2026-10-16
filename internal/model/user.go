@@ -29,8 +29,10 @@ type User struct {
 	// TOTPSecret is encrypted; TOTPEnabledAt stays nil until setup is confirmed with a code.
 	TOTPSecret    []byte     `json:"-"`
 	TOTPEnabledAt *time.Time `json:"-"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// LockedUntil closes the books up to and including this day.
+	LockedUntil *time.Time `json:"-"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type RegisterRequest struct {
@@ -96,6 +98,7 @@ type UserResponse struct {
 	Locale         *string `json:"locale"` // null = follow the browser
 	EmailVerified  bool    `json:"email_verified"`
 	TOTPEnabled    bool    `json:"totp_enabled"`
+	LockedUntil    *string `json:"locked_until"`
 }
 
 // Session is what login and refresh hand out. The refresh token never goes in the JSON body:
@@ -123,6 +126,7 @@ func ToUserResponse(u *User) UserResponse {
 		Locale:         u.Locale,
 		EmailVerified:  u.EmailVerifiedAt != nil,
 		TOTPEnabled:    u.TOTPEnabledAt != nil,
+		LockedUntil:    DateString(u.LockedUntil),
 	}
 }
 
@@ -177,4 +181,9 @@ type SessionInfo struct {
 type TOTPSetup struct {
 	Secret string `json:"secret"` // base32, for typing into the app by hand
 	URI    string `json:"uri"`    // otpauth:// URI, shown as a QR code
+}
+
+// LockRequest closes the books up to a day; null opens them again.
+type LockRequest struct {
+	LockedUntil *string `json:"locked_until" binding:"omitnil,datetime=2006-01-02"`
 }
