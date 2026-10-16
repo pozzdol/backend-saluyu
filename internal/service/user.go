@@ -36,7 +36,7 @@ type UserRepository interface {
 	Create(ctx context.Context, user *model.User) error
 	FindByEmail(ctx context.Context, email string) (*model.User, error)
 	FindByID(ctx context.Context, id uuid.UUID) (*model.User, error)
-	Update(ctx context.Context, id uuid.UUID, name, image *string) (*model.User, error)
+	Update(ctx context.Context, id uuid.UUID, req model.UpdateProfileRequest) (*model.User, error)
 	UpdatePassword(ctx context.Context, id uuid.UUID, hash string, changedAt time.Time) error
 }
 
@@ -188,7 +188,7 @@ func (s *UserService) UpdateProfile(ctx context.Context, claims *token.Claims, r
 	if _, err := s.Me(ctx, claims); err != nil {
 		return nil, err
 	}
-	return s.repo.Update(ctx, claims.UserID, req.Name, req.Image)
+	return s.repo.Update(ctx, claims.UserID, req)
 }
 
 // ChangePassword logs out every device and returns a fresh session for the caller.

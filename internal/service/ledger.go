@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pozzdol/backend-saluyu/internal/model"
+	"github.com/pozzdol/backend-saluyu/internal/period"
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 )
 
@@ -37,6 +38,7 @@ type LedgerRepository interface {
 	LedgerLines(ctx context.Context, userID, accountID uuid.UUID, from, to *time.Time) (int64, []model.LedgerRow, error)
 	TrialBalanceTotals(ctx context.Context, userID uuid.UUID, asOf time.Time) ([]model.TrialBalanceRow, error)
 	StartDate(ctx context.Context, userID uuid.UUID) (*time.Time, error)
+	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)
 	BalanceAsOf(ctx context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error)
 	ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, e *model.Entry) error
 }
@@ -110,6 +112,15 @@ func (s *LedgerService) PostEntry(ctx context.Context, userID uuid.UUID, req mod
 			{AccountID: from.ID, Credit: req.Amount},
 		},
 	}
+	// ponytail: next_period is ignored for other kinds; only early salary needs it.
+	if req.NextPeriod && req.Kind == "income" {
+		day, err := s.repo.PeriodStartDay(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		next := period.For(date, day).Next
+		e.PeriodDate = &next
+	}
 	if err := s.post(ctx, userID, e, accounts); err != nil {
 		return nil, err
 	}
@@ -161,6 +172,7 @@ func validate(e *model.Entry, accounts map[uuid.UUID]model.Account) error {
 		return ErrUnbalanced
 	}
 	e.Date = e.EntryDate.Format(time.DateOnly)
+	e.PeriodDateStr = model.DateString(e.PeriodDate)
 	return nil
 }
 

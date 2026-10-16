@@ -146,7 +146,8 @@ func fail(c *gin.Context, op string, err error) {
 	case errors.Is(err, service.ErrSameAccount), errors.Is(err, service.ErrWrongAccountType),
 		errors.Is(err, service.ErrAccountInactive), errors.Is(err, service.ErrBeforeStart),
 		errors.Is(err, service.ErrNotBalanceSheet), errors.Is(err, service.ErrNeedsContact),
-		errors.Is(err, service.ErrDuplicateAccount), errors.Is(err, service.ErrWrongCounter):
+		errors.Is(err, service.ErrDuplicateAccount), errors.Is(err, service.ErrWrongCounter),
+		errors.Is(err, service.ErrNotExpenseAccount):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
 		log.Printf("failed to %s: %v", op, err)

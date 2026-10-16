@@ -34,6 +34,7 @@ func (f *fakeRepo) Create(_ context.Context, u *model.User) error {
 		}
 	}
 	u.ID, u.CreatedAt, u.UpdatedAt = uuid.New(), time.Now(), time.Now()
+	u.PeriodStartDay = 25 // column default
 	copied := *u
 	f.users[u.ID] = &copied
 	return nil
@@ -65,18 +66,24 @@ func (f *fakeRepo) FindByID(_ context.Context, id uuid.UUID) (*model.User, error
 	return &copied, nil
 }
 
-func (f *fakeRepo) Update(_ context.Context, id uuid.UUID, name, image *string) (*model.User, error) {
+func (f *fakeRepo) Update(_ context.Context, id uuid.UUID, req model.UpdateProfileRequest) (*model.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	u, ok := f.users[id]
 	if !ok {
 		return nil, repository.ErrUserNotFound
 	}
-	if name != nil {
-		u.Name = *name
+	if req.Name != nil {
+		u.Name = *req.Name
 	}
-	if image != nil {
-		u.Image = *image
+	if req.Image != nil {
+		u.Image = *req.Image
+	}
+	if req.PeriodStartDay != nil {
+		u.PeriodStartDay = *req.PeriodStartDay
+		if f.ledger != nil {
+			f.ledger.setPeriodStartDay(id, u.PeriodStartDay)
+		}
 	}
 	u.UpdatedAt = time.Now()
 	copied := *u
@@ -149,7 +156,8 @@ func newTestServer() (*gin.Engine, *fakeRepo) {
 	fl := newFakeLedger()
 	repo.ledger = fl
 	ledger := NewLedgerHandler(service.NewLedgerService(fl))
-	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), ledger, tm)
+	reports := NewReportHandler(service.NewReportService(fl))
+	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), ledger, reports, tm)
 	return r, repo
 }
 

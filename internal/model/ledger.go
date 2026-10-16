@@ -90,14 +90,18 @@ type Line struct {
 }
 
 type Entry struct {
-	ID          uuid.UUID `json:"id"`
-	EntryNo     int64     `json:"entry_no"`
-	EntryDate   time.Time `json:"-"`
-	Date        string    `json:"entry_date"` // EntryDate as YYYY-MM-DD: a calendar date, not an instant
-	Kind        string    `json:"kind"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"created_at"`
-	Lines       []Line    `json:"lines"`
+	ID        uuid.UUID `json:"id"`
+	EntryNo   int64     `json:"entry_no"`
+	EntryDate time.Time `json:"-"`
+	Date      string    `json:"entry_date"` // EntryDate as YYYY-MM-DD: a calendar date, not an instant
+	// PeriodDate moves the entry into another period for period reports (salary paid early).
+	// nil means EntryDate. The balance sheet always uses EntryDate: that is when the money moved.
+	PeriodDate    *time.Time `json:"-"`
+	PeriodDateStr *string    `json:"period_date"`
+	Kind          string     `json:"kind"`
+	Description   string     `json:"description"`
+	CreatedAt     time.Time  `json:"created_at"`
+	Lines         []Line     `json:"lines"`
 }
 
 // PostEntryRequest is the simple form: money moves from one account to another.
@@ -109,6 +113,8 @@ type PostEntryRequest struct {
 	FromAccountID uuid.UUID `json:"from_account_id" binding:"required"`
 	ToAccountID   uuid.UUID `json:"to_account_id" binding:"required"`
 	Description   string    `json:"description" binding:"max=200"`
+	// NextPeriod counts an income in the period after entry_date's (salary arriving before payday).
+	NextPeriod bool `json:"next_period"`
 }
 
 func (r *PostEntryRequest) Normalize() {

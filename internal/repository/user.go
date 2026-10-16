@@ -16,7 +16,7 @@ var (
 	ErrEmailTaken   = errors.New("email already taken")
 )
 
-const userColumns = `id, name, email, password, img_url, is_active, password_changed_at, start_date, created_at, updated_at`
+const userColumns = `id, name, email, password, img_url, is_active, password_changed_at, start_date, period_start_day, created_at, updated_at`
 
 type UserRepository struct {
 	db *sql.DB
@@ -38,10 +38,10 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 	query := `
 	INSERT INTO users (name, email, password, img_url, is_active, password_changed_at)
 	VALUES ($1, $2, $3, $4, $5, $6)
-	RETURNING id, created_at, updated_at
+	RETURNING id, period_start_day, created_at, updated_at
 	`
 	err = tx.QueryRowContext(ctx, query, user.Name, user.Email, user.Password, user.Image, user.IsActive, user.PasswordChangedAt).
-		Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+		Scan(&user.ID, &user.PeriodStartDay, &user.CreatedAt, &user.UpdatedAt)
 
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
@@ -78,6 +78,7 @@ func scanUser(row *sql.Row) (*model.User, error) {
 		&user.IsActive,
 		&user.PasswordChangedAt,
 		&user.StartDate,
+		&user.PeriodStartDay,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	)
@@ -91,13 +92,14 @@ func scanUser(row *sql.Row) (*model.User, error) {
 }
 
 // Update changes only the fields that are not nil and bumps updated_at.
-func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, name, image *string) (*model.User, error) {
+func (r *UserRepository) Update(ctx context.Context, id uuid.UUID, req model.UpdateProfileRequest) (*model.User, error) {
 	query := `
 	UPDATE users
-	SET name = COALESCE($2, name), img_url = COALESCE($3, img_url), updated_at = now()
+	SET name = COALESCE($2, name), img_url = COALESCE($3, img_url),
+	    period_start_day = COALESCE($4, period_start_day), updated_at = now()
 	WHERE id = $1
 	RETURNING ` + userColumns
-	return scanUser(r.db.QueryRowContext(ctx, query, id, name, image))
+	return scanUser(r.db.QueryRowContext(ctx, query, id, req.Name, req.Image, req.PeriodStartDay))
 }
 
 func (r *UserRepository) UpdatePassword(ctx context.Context, id uuid.UUID, hash string, changedAt time.Time) error {

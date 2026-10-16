@@ -8,7 +8,7 @@ import (
 	"github.com/pozzdol/backend-saluyu/internal/token"
 )
 
-func RegisterRoutes(r *gin.Engine, users *UserHandler, ledger *LedgerHandler, tm *token.Maker) {
+func RegisterRoutes(r *gin.Engine, users *UserHandler, ledger *LedgerHandler, reports *ReportHandler, tm *token.Maker) {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -41,4 +41,9 @@ func RegisterRoutes(r *gin.Engine, users *UserHandler, ledger *LedgerHandler, tm
 	app.POST("/entries", ledger.PostEntry)
 	app.DELETE("/entries/:id", ledger.DeleteEntry)
 	app.GET("/reports/trial-balance", ledger.TrialBalance)
+	app.GET("/reports/income-statement", reports.IncomeStatement)
+	app.GET("/reports/balance-sheet", reports.BalanceSheet)
+	app.GET("/dashboard", reports.Dashboard)
+	app.GET("/budgets", reports.Budgets)
+	app.PUT("/budgets/:id", reports.SetBudget)
 }

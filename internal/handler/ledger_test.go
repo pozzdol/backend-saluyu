@@ -21,11 +21,102 @@ type fakeLedger struct {
 	accounts map[uuid.UUID]map[uuid.UUID]*model.Account // user -> id -> account
 	entries  map[uuid.UUID][]*model.Entry               // user -> entries
 	start    map[uuid.UUID]time.Time                    // user -> start date
+	startDay map[uuid.UUID]int                          // user -> period_start_day; missing = 25, the column default
+	budgets  map[uuid.UUID][]model.Budget               // user -> budgets, unique per (account, period start)
 }
 
 func newFakeLedger() *fakeLedger {
 	return &fakeLedger{accounts: map[uuid.UUID]map[uuid.UUID]*model.Account{},
-		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{}}
+		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{},
+		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{}}
+}
+
+func (f *fakeLedger) setPeriodStartDay(userID uuid.UUID, day int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.startDay[userID] = day
+}
+
+func (f *fakeLedger) PeriodStartDay(_ context.Context, userID uuid.UUID) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d, ok := f.startDay[userID]; ok {
+		return d, nil
+	}
+	return 25, nil
+}
+
+// Movements sums lines per account and kind for entries dated in [from, to), sorted by code like the SQL.
+func (f *fakeLedger) Movements(_ context.Context, userID uuid.UUID, from, to time.Time, byPeriodDate bool) ([]model.Movement, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	type key struct {
+		account uuid.UUID
+		kind    string
+	}
+	sums := map[key]*model.Movement{}
+	for _, e := range f.entries[userID] {
+		d := e.EntryDate
+		if byPeriodDate && e.PeriodDate != nil {
+			d = *e.PeriodDate
+		}
+		if d.Before(from) || !d.Before(to) {
+			continue
+		}
+		for _, l := range e.Lines {
+			k := key{l.AccountID, e.Kind}
+			m, ok := sums[k]
+			if !ok {
+				a := f.userAccounts(userID)[l.AccountID]
+				m = &model.Movement{AccountID: a.ID, Code: a.Code, Name: a.Name, Type: a.Type, Category: a.Category, Kind: e.Kind}
+				sums[k] = m
+			}
+			m.Debit += l.Debit
+			m.Credit += l.Credit
+		}
+	}
+	out := []model.Movement{}
+	for _, m := range sums {
+		out = append(out, *m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Code != out[j].Code {
+			return out[i].Code < out[j].Code
+		}
+		return out[i].Kind < out[j].Kind
+	})
+	return out, nil
+}
+
+// EffectiveBudgets returns the latest budget per account with a period start <= periodStart.
+func (f *fakeLedger) EffectiveBudgets(_ context.Context, userID uuid.UUID, periodStart time.Time) ([]model.Budget, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	latest := map[uuid.UUID]model.Budget{}
+	for _, b := range f.budgets[userID] {
+		if cur, ok := latest[b.AccountID]; !b.PeriodStart.After(periodStart) && (!ok || b.PeriodStart.After(cur.PeriodStart)) {
+			latest[b.AccountID] = b
+		}
+	}
+	out := []model.Budget{}
+	for _, b := range latest {
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+func (f *fakeLedger) UpsertBudget(_ context.Context, userID, accountID uuid.UUID, periodStart time.Time, amount int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, b := range f.budgets[userID] {
+		if b.AccountID == accountID && b.PeriodStart.Equal(periodStart) {
+			f.budgets[userID][i].Amount = amount
+			return nil
+		}
+	}
+	a := f.userAccounts(userID)[accountID]
+	f.budgets[userID] = append(f.budgets[userID], model.Budget{AccountID: accountID, Name: a.Name, PeriodStart: periodStart, Amount: amount})
+	return nil
 }
 
 func (f *fakeLedger) StartDate(_ context.Context, userID uuid.UUID) (*time.Time, error) {

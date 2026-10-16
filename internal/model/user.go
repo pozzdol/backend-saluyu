@@ -18,8 +18,10 @@ type User struct {
 	PasswordChangedAt time.Time `json:"-"`
 	// StartDate is the day the books open; nil until the opening balance is set.
 	StartDate *time.Time `json:"-"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	// PeriodStartDay is the payday (1..28) on which each budgeting period starts.
+	PeriodStartDay int       `json:"-"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type RegisterRequest struct {
@@ -46,6 +48,8 @@ func (r *LoginRequest) Normalize() {
 type UpdateProfileRequest struct {
 	Name  *string `json:"name" binding:"omitnil,min=3,max=100"`
 	Image *string `json:"img_url" binding:"omitnil,url,max=2048"`
+	// Changing it re-slices past periods too: periods are computed, never stored.
+	PeriodStartDay *int `json:"period_start_day" binding:"omitnil,min=1,max=28"`
 }
 
 func (r *UpdateProfileRequest) Normalize() {
@@ -76,7 +80,8 @@ type UserResponse struct {
 	Image    string    `json:"img_url"`
 	IsActive bool      `json:"is_active"`
 	// StartDate as YYYY-MM-DD, or null: the frontend sends a new user to the opening-balance page.
-	StartDate *string `json:"start_date"`
+	StartDate      *string `json:"start_date"`
+	PeriodStartDay int     `json:"period_start_day"`
 }
 
 // Session is what login and refresh hand out. The refresh token never goes in the JSON body:
@@ -90,12 +95,13 @@ type Session struct {
 
 func ToUserResponse(u *User) UserResponse {
 	return UserResponse{
-		ID:        u.ID,
-		Name:      u.Name,
-		Email:     u.Email,
-		Image:     u.Image,
-		IsActive:  u.IsActive,
-		StartDate: DateString(u.StartDate),
+		ID:             u.ID,
+		Name:           u.Name,
+		Email:          u.Email,
+		Image:          u.Image,
+		IsActive:       u.IsActive,
+		StartDate:      DateString(u.StartDate),
+		PeriodStartDay: u.PeriodStartDay,
 	}
 }
 

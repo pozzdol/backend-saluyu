@@ -148,10 +148,10 @@ func lockUser(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
 
 func insertEntry(ctx context.Context, tx *sql.Tx, userID uuid.UUID, e *model.Entry) error {
 	err := tx.QueryRowContext(ctx, `
-	INSERT INTO journal_entries (user_id, entry_no, entry_date, kind, description)
-	VALUES ($1, (SELECT COALESCE(MAX(entry_no), 0) + 1 FROM journal_entries WHERE user_id = $1), $2, $3, $4)
+	INSERT INTO journal_entries (user_id, entry_no, entry_date, kind, description, period_date)
+	VALUES ($1, (SELECT COALESCE(MAX(entry_no), 0) + 1 FROM journal_entries WHERE user_id = $1), $2, $3, $4, $5)
 	RETURNING id, entry_no, created_at`,
-		userID, e.EntryDate, e.Kind, e.Description).Scan(&e.ID, &e.EntryNo, &e.CreatedAt)
+		userID, e.EntryDate, e.Kind, e.Description, e.PeriodDate).Scan(&e.ID, &e.EntryNo, &e.CreatedAt)
 	if err != nil {
 		return err
 	}
@@ -208,6 +208,12 @@ func (r *LedgerRepository) StartDate(ctx context.Context, userID uuid.UUID) (*ti
 	return d, err
 }
 
+func (r *LedgerRepository) PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error) {
+	var d int
+	err := r.db.QueryRowContext(ctx, `SELECT period_start_day FROM users WHERE id = $1`, userID).Scan(&d)
+	return d, err
+}
+
 // BalanceAsOf is an account's debits minus credits up to and including date.
 func (r *LedgerRepository) BalanceAsOf(ctx context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error) {
 	var b int64
@@ -238,7 +244,7 @@ func (r *LedgerRepository) DeleteEntry(ctx context.Context, userID, id uuid.UUID
 // Every filter is optional: a NULL parameter switches its condition off.
 func (r *LedgerRepository) ListEntries(ctx context.Context, userID uuid.UUID, f model.EntryFilter) ([]model.Entry, int, error) {
 	rows, err := r.db.QueryContext(ctx, `
-	SELECT e.id, e.entry_no, e.entry_date, e.kind, e.description, e.created_at,
+	SELECT e.id, e.entry_no, e.entry_date, e.period_date, e.kind, e.description, e.created_at,
 	       (SELECT json_agg(json_build_object(
 	                   'account_id', l.account_id, 'code', a.code, 'name', a.name,
 	                   'debit', l.debit, 'credit', l.credit) ORDER BY l.id)
@@ -266,13 +272,14 @@ func (r *LedgerRepository) ListEntries(ctx context.Context, userID uuid.UUID, f 
 	for rows.Next() {
 		var e model.Entry
 		var lines []byte
-		if err := rows.Scan(&e.ID, &e.EntryNo, &e.EntryDate, &e.Kind, &e.Description, &e.CreatedAt, &lines, &total); err != nil {
+		if err := rows.Scan(&e.ID, &e.EntryNo, &e.EntryDate, &e.PeriodDate, &e.Kind, &e.Description, &e.CreatedAt, &lines, &total); err != nil {
 			return nil, 0, err
 		}
 		if err := json.Unmarshal(lines, &e.Lines); err != nil {
 			return nil, 0, err
 		}
 		e.Date = e.EntryDate.Format(time.DateOnly)
+		e.PeriodDateStr = model.DateString(e.PeriodDate)
 		out = append(out, e)
 	}
 	return out, total, rows.Err()

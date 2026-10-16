@@ -70,9 +70,17 @@ func fieldMessage(fe validator.FieldError) string {
 	case "url":
 		return "must be a valid URL"
 	case "min":
-		return "must be at least " + fe.Param() + " characters"
+		return "must be at least " + fe.Param() + unit(fe)
 	case "max":
-		return "must be at most " + fe.Param() + " characters"
+		return "must be at most " + fe.Param() + unit(fe)
 	}
 	return "is invalid"
+}
+
+// unit is " characters" for text; min/max on a number is its value.
+func unit(fe validator.FieldError) string {
+	if fe.Kind() == reflect.String {
+		return " characters"
+	}
+	return ""
 }
