@@ -71,3 +71,27 @@ func (r *LedgerRepository) UpsertBudget(ctx context.Context, userID, accountID u
 		userID, accountID, periodStart, amount)
 	return err
 }
+
+// EntryLines returns every line of the user's entries dated (by entry_date) in [from, to).
+func (r *LedgerRepository) EntryLines(ctx context.Context, userID uuid.UUID, from, to time.Time) ([]model.EntryLine, error) {
+	rows, err := r.db.QueryContext(ctx, `
+	SELECT e.id, e.entry_no, e.description, e.kind, e.entry_date, a.id, a.code, a.name, a.type, a.category, l.debit, l.credit
+	FROM journal_entries e
+	JOIN journal_lines l ON l.entry_id = e.id
+	JOIN accounts a ON a.id = l.account_id
+	WHERE e.user_id = $1 AND e.entry_date >= $2 AND e.entry_date < $3
+	ORDER BY e.entry_date, e.entry_no, l.id`, userID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.EntryLine
+	for rows.Next() {
+		var l model.EntryLine
+		if err := rows.Scan(&l.EntryID, &l.EntryNo, &l.Description, &l.Kind, &l.Date, &l.AccountID, &l.Code, &l.Name, &l.Type, &l.Category, &l.Debit, &l.Credit); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}

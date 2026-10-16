@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -82,7 +83,7 @@ func (h *ReportHandler) IncomeStatement(c *gin.Context) {
 	if !ok {
 		return
 	}
-	is, err := h.svc.IncomeStatement(c.Request.Context(), currentClaims(c).UserID, date)
+	is, err := h.svc.IncomeStatement(c.Request.Context(), currentClaims(c).UserID, date, c.Query("compare") == "1")
 	if err != nil {
 		fail(c, "income statement", err)
 		return
@@ -115,4 +116,65 @@ func (h *ReportHandler) Export(c *gin.Context) {
 	name := "saluyu-" + time.Now().Format(time.DateOnly) + ".zip"
 	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
 	c.Data(http.StatusOK, "application/zip", buf.Bytes())
+}
+
+func (h *ReportHandler) Insights(c *gin.Context) {
+	if date, ok := reportDate(c); ok {
+		v, err := h.svc.Insights(c.Request.Context(), currentClaims(c).UserID, date)
+		respond(c, "insights", http.StatusOK, v, err)
+	}
+}
+
+func (h *ReportHandler) Health(c *gin.Context) {
+	if date, ok := reportDate(c); ok {
+		v, err := h.svc.Health(c.Request.Context(), currentClaims(c).UserID, date)
+		respond(c, "health", http.StatusOK, v, err)
+	}
+}
+
+func (h *ReportHandler) CashFlow(c *gin.Context) {
+	if date, ok := reportDate(c); ok {
+		v, err := h.svc.CashFlow(c.Request.Context(), currentClaims(c).UserID, date)
+		respond(c, "cash flow", http.StatusOK, v, err)
+	}
+}
+
+func (h *ReportHandler) Trends(c *gin.Context) {
+	date, ok := reportDate(c)
+	if !ok {
+		return
+	}
+	n, err := strconv.Atoi(c.DefaultQuery("periods", "12"))
+	if err != nil || n < 1 || n > 36 {
+		badQuery(c, "periods")
+		return
+	}
+	v, err := h.svc.Trends(c.Request.Context(), currentClaims(c).UserID, date, n)
+	respond(c, "trends", http.StatusOK, v, err)
+}
+
+func (h *ReportHandler) TaxSummary(c *gin.Context) {
+	year, err := strconv.Atoi(c.DefaultQuery("year", strconv.Itoa(time.Now().Year()-1)))
+	if err != nil || year < 2000 || year > 2100 {
+		badQuery(c, "year")
+		return
+	}
+	v, err := h.svc.TaxSummary(c.Request.Context(), currentClaims(c).UserID, year)
+	respond(c, "tax summary", http.StatusOK, v, err)
+}
+
+// ExportXLSX downloads one report as an Excel file; built in memory so errors stay JSON.
+func (h *ReportHandler) ExportXLSX(c *gin.Context) {
+	date, ok := reportDate(c)
+	if !ok {
+		return
+	}
+	var buf bytes.Buffer
+	name, err := h.svc.ExportReport(c.Request.Context(), currentClaims(c).UserID, c.Query("report"), date, &buf)
+	if err != nil {
+		fail(c, "export report", err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="`+name+`.xlsx"`)
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
 }

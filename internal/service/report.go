@@ -21,15 +21,17 @@ type ReportRepository interface {
 	Movements(ctx context.Context, userID uuid.UUID, from, to time.Time, byPeriodDate bool) ([]model.Movement, error)
 	EffectiveBudgets(ctx context.Context, userID uuid.UUID, periodStart time.Time) ([]model.Budget, error)
 	UpsertBudget(ctx context.Context, userID, accountID uuid.UUID, periodStart time.Time, amount int64) error
+	EntryLines(ctx context.Context, userID uuid.UUID, from, to time.Time) ([]model.EntryLine, error)
 }
 
 // ReportService computes every figure from journal lines on each request; nothing is stored.
 type ReportService struct {
 	repo ReportRepository
+	now  func() time.Time
 }
 
 func NewReportService(repo ReportRepository) *ReportService {
-	return &ReportService{repo: repo}
+	return &ReportService{repo: repo, now: time.Now}
 }
 
 // periodOf is the user's payday period containing date.
@@ -224,7 +226,9 @@ func (s *ReportService) SetBudget(ctx context.Context, userID, accountID uuid.UU
 	return &rows[0], nil
 }
 
-func (s *ReportService) IncomeStatement(ctx context.Context, userID uuid.UUID, date time.Time) (*model.IncomeStatement, error) {
+// IncomeStatement covers the period containing date; withCompare adds the previous period
+// and the average of the three before it, per row.
+func (s *ReportService) IncomeStatement(ctx context.Context, userID uuid.UUID, date time.Time, withCompare bool) (*model.IncomeStatement, error) {
 	p, err := s.periodOf(ctx, userID, date)
 	if err != nil {
 		return nil, err
@@ -237,6 +241,11 @@ func (s *ReportService) IncomeStatement(ctx context.Context, userID uuid.UUID, d
 	is.Revenue, is.RevenueTotal = amounts(moves, ofType("Revenue"))
 	is.Expense, is.ExpenseTotal = amounts(moves, ofType("Expense"))
 	is.NetIncome = is.RevenueTotal - is.ExpenseTotal
+	if withCompare {
+		if err := s.compare(ctx, userID, p, is); err != nil {
+			return nil, err
+		}
+	}
 	return is, nil
 }
 

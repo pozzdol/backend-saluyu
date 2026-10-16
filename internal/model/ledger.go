@@ -146,8 +146,10 @@ type EntryFilter struct {
 	Kind      *string
 	AccountID *uuid.UUID
 	Query     string
-	Limit     int
-	Offset    int
+	// AmountMin and AmountMax bound the entry amount in sen (both inclusive, either optional).
+	AmountMin, AmountMax *int64
+	Limit                int
+	Offset               int
 }
 
 type LedgerRow struct {

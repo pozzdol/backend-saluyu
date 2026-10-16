@@ -137,10 +137,20 @@ func (h *LedgerHandler) ListEntries(c *gin.Context) {
 	if k := c.Query("kind"); k != "" {
 		f.Kind = &k // an unknown kind fails the enum cast in SQL, so validate here first
 		switch k {
-		case "income", "expense", "transfer", "loan", "repayment", "opening", "cash_count", "adjustment":
+		case "income", "expense", "transfer", "loan", "repayment", "opening", "cash_count", "adjustment", "borrowing", "installment":
 		default:
 			badQuery(c, "kind")
 			return
+		}
+	}
+	for name, dst := range map[string]**int64{"amount_min": &f.AmountMin, "amount_max": &f.AmountMax} {
+		if v := c.Query(name); v != "" {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				badQuery(c, name)
+				return
+			}
+			*dst = &n
 		}
 	}
 	if v := c.Query("account_id"); v != "" {

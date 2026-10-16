@@ -80,6 +80,8 @@ var apiErrors = []apiError{
 	{service.ErrNoColumns, http.StatusBadRequest, "no_columns"},
 	{service.ErrImportAccount, http.StatusBadRequest, "import_account"},
 
+	{service.ErrUnknownReport, http.StatusBadRequest, "unknown_report"},
+
 	{service.ErrInvalidLink, http.StatusBadRequest, "invalid_link"},
 	{service.ErrMFAInvalid, http.StatusUnauthorized, "mfa_expired"},
 	{service.ErrInvalidCode, http.StatusBadRequest, "invalid_code"},

@@ -310,9 +310,12 @@ func (r *LedgerRepository) ListEntries(ctx context.Context, userID uuid.UUID, f 
 	  AND ($5::uuid IS NULL OR EXISTS (
 	        SELECT 1 FROM journal_lines l WHERE l.entry_id = e.id AND l.account_id = $5))
 	  AND ($6::text = '' OR e.description ILIKE '%' || $6 || '%')
+	  -- An entry's amount is its debit total (equal to its credit total).
+	  AND (($9::bigint IS NULL AND $10::bigint IS NULL) OR
+	       (SELECT SUM(debit) FROM journal_lines WHERE entry_id = e.id) BETWEEN COALESCE($9, 0) AND COALESCE($10, 9223372036854775807))
 	ORDER BY e.entry_date DESC, e.entry_no DESC
 	LIMIT $7 OFFSET $8`,
-		userID, f.From, f.To, f.Kind, f.AccountID, f.Query, f.Limit, f.Offset)
+		userID, f.From, f.To, f.Kind, f.AccountID, f.Query, f.Limit, f.Offset, f.AmountMin, f.AmountMax)
 	if err != nil {
 		return nil, 0, err
 	}
