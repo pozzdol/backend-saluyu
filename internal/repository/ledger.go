@@ -13,14 +13,15 @@ import (
 )
 
 var (
-	ErrAccountNotFound  = errors.New("account not found")
-	ErrAccountCodeTaken = errors.New("account code already used")
-	ErrEntryNotFound    = errors.New("entry not found")
-	ErrOpeningLocked    = errors.New("the opening entry can only be changed on the opening balance page")
-	ErrBooksNotEmpty    = errors.New("opening balance can only change before other transactions exist")
+	ErrAccountNotFound   = errors.New("account not found")
+	ErrAccountCodeTaken  = errors.New("account code already used")
+	ErrEntryNotFound     = errors.New("entry not found")
+	ErrOpeningLocked     = errors.New("the opening entry can only be changed on the opening balance page")
+	ErrBooksNotEmpty     = errors.New("opening balance can only change before other transactions exist")
+	ErrStartAfterEntries = errors.New("the start date is after your first transaction; pick that date or earlier")
 )
 
-const accountColumns = `id, code, name, type, category, normal_balance, is_active`
+const accountColumns = `id, code, name, type, category, normal_balance, is_active, COALESCE(icon, ''), COALESCE(color, '')`
 
 type LedgerRepository struct {
 	db *sql.DB
@@ -33,13 +34,13 @@ func NewLedgerRepository(db *sql.DB) *LedgerRepository {
 // seedAccounts copies the default chart of accounts to a new user inside the register transaction.
 func seedAccounts(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO accounts (user_id, code, name, type, category, normal_balance) VALUES ($1, $2, $3, $4, $5, $6)`)
+		`INSERT INTO accounts (user_id, code, name, type, category, normal_balance, icon, color) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, a := range model.DefaultAccounts {
-		if _, err := stmt.ExecContext(ctx, userID, a.Code, a.Name, a.Type, a.Category, model.NormalBalance(a.Type)); err != nil {
+		if _, err := stmt.ExecContext(ctx, userID, a.Code, a.Name, a.Type, a.Category, model.NormalBalance(a.Type), a.Icon, a.Color); err != nil {
 			return err
 		}
 	}
@@ -51,7 +52,7 @@ func scanAccounts(rows *sql.Rows) ([]model.Account, error) {
 	var out []model.Account
 	for rows.Next() {
 		var a model.Account
-		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive); err != nil {
+		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -59,12 +60,27 @@ func scanAccounts(rows *sql.Rows) ([]model.Account, error) {
 	return out, rows.Err()
 }
 
+// ListAccounts also counts each account's journal lines of the last 30 days, so pickers can
+// put the categories a person actually uses first.
 func (r *LedgerRepository) ListAccounts(ctx context.Context, userID uuid.UUID) ([]model.Account, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT `+accountColumns+` FROM accounts WHERE user_id = $1 ORDER BY code`, userID)
+	rows, err := r.db.QueryContext(ctx, `
+	SELECT `+accountColumns+`,
+	       (SELECT count(*) FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
+	        WHERE l.account_id = a.id AND e.entry_date >= CURRENT_DATE - 30)
+	FROM accounts a WHERE user_id = $1 ORDER BY code`, userID)
 	if err != nil {
 		return nil, err
 	}
-	return scanAccounts(rows)
+	defer rows.Close()
+	out := []model.Account{}
+	for rows.Next() {
+		var a model.Account
+		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Uses30d); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // FindAccounts returns the requested accounts that belong to userID, keyed by ID.
@@ -92,10 +108,10 @@ func (r *LedgerRepository) FindAccounts(ctx context.Context, userID uuid.UUID, i
 
 func (r *LedgerRepository) CreateAccount(ctx context.Context, userID uuid.UUID, a *model.Account) error {
 	err := r.db.QueryRowContext(ctx, `
-	INSERT INTO accounts (user_id, code, name, type, category, normal_balance)
-	VALUES ($1, $2, $3, $4, $5, $6)
+	INSERT INTO accounts (user_id, code, name, type, category, normal_balance, icon, color)
+	VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''))
 	RETURNING id, is_active`,
-		userID, a.Code, a.Name, a.Type, a.Category, a.NormalBalance).Scan(&a.ID, &a.IsActive)
+		userID, a.Code, a.Name, a.Type, a.Category, a.NormalBalance, a.Icon, a.Color).Scan(&a.ID, &a.IsActive)
 
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -109,10 +125,11 @@ func (r *LedgerRepository) UpdateAccount(ctx context.Context, userID, id uuid.UU
 	err := r.db.QueryRowContext(ctx, `
 	UPDATE accounts
 	SET name = COALESCE($3, name), category = COALESCE($4, category),
-	    is_active = COALESCE($5, is_active), updated_at = now()
+	    is_active = COALESCE($5, is_active), icon = COALESCE($6, icon), color = COALESCE($7, color),
+	    updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+accountColumns, id, userID, req.Name, req.Category, req.IsActive).
-		Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive)
+	RETURNING `+accountColumns, id, userID, req.Name, req.Category, req.IsActive, req.Icon, req.Color).
+		Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrAccountNotFound
 	}
@@ -158,7 +175,10 @@ func insertEntry(ctx context.Context, tx *sql.Tx, userID uuid.UUID, e *model.Ent
 	if err != nil {
 		return err
 	}
+	return insertLines(ctx, tx, e)
+}
 
+func insertLines(ctx context.Context, tx *sql.Tx, e *model.Entry) error {
 	for _, l := range e.Lines {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO journal_lines (entry_id, account_id, debit, credit, contact_id) VALUES ($1, $2, $3, $4, $5)`,
@@ -169,9 +189,11 @@ func insertEntry(ctx context.Context, tx *sql.Tx, userID uuid.UUID, e *model.Ent
 	return nil
 }
 
-// ReplaceOpening swaps the opening entry and sets the start date, but only while the
-// books hold nothing else. e may be nil when every opening balance is zero.
-func (r *LedgerRepository) ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, e *model.Entry) error {
+// ReplaceOpening sets the opening entry and the start date. before is the current opening
+// entry (nil if none) and e the new one (nil when every balance is zero). An existing opening
+// is edited in place, so it keeps its history. The books may already hold other entries, as
+// long as none is dated before the new start date.
+func (r *LedgerRepository) ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, before, e *model.Entry) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -181,23 +203,28 @@ func (r *LedgerRepository) ReplaceOpening(ctx context.Context, userID uuid.UUID,
 	if err := lockUser(ctx, tx, userID); err != nil {
 		return err
 	}
-	var others int
-	err = tx.QueryRowContext(ctx,
-		`SELECT count(*) FROM journal_entries WHERE user_id = $1 AND kind <> 'opening'`, userID).Scan(&others)
+	var earlier bool
+	err = tx.QueryRowContext(ctx, `
+	SELECT EXISTS (SELECT 1 FROM journal_entries WHERE user_id = $1 AND kind <> 'opening' AND entry_date < $2)`,
+		userID, startDate).Scan(&earlier)
 	if err != nil {
 		return err
 	}
-	if others > 0 {
-		return ErrBooksNotEmpty
+	if earlier {
+		return ErrStartAfterEntries
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM journal_entries WHERE user_id = $1 AND kind = 'opening'`, userID); err != nil {
-		return err
+	switch {
+	case before != nil && e != nil:
+		e.ID, e.EntryNo, e.CreatedAt = before.ID, before.EntryNo, before.CreatedAt
+		err = replaceInTx(ctx, tx, userID, before, e)
+	case before != nil:
+		_, err = tx.ExecContext(ctx, `DELETE FROM journal_entries WHERE id = $1`, before.ID)
+	case e != nil:
+		err = insertEntry(ctx, tx, userID, e)
 	}
-	if e != nil {
-		if err := insertEntry(ctx, tx, userID, e); err != nil {
-			return err
-		}
+	if err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET start_date = $2, updated_at = now() WHERE id = $1`, userID, startDate); err != nil {
 		return err

@@ -16,6 +16,9 @@ type Account struct {
 	Category      string    `json:"category"`
 	NormalBalance string    `json:"normal_balance"`
 	IsActive      bool      `json:"is_active"`
+	Icon          string    `json:"icon"`     // lucide icon name, "" = default for the type
+	Color         string    `json:"color"`    // palette token, "" = default for the type
+	Uses30d       int       `json:"uses_30d"` // journal lines in the last 30 days, for "most used first"
 }
 
 // NormalBalance is the side that increases an account: debit for Asset and Expense, credit for the rest.
@@ -26,30 +29,30 @@ func NormalBalance(accountType string) string {
 	return "Credit"
 }
 
-type TemplateAccount struct{ Code, Name, Type, Category string }
+type TemplateAccount struct{ Code, Name, Type, Category, Icon, Color string }
 
 // DefaultAccounts is the "Pribadi" chart of accounts every new user starts with.
 // Keep in sync with migration 000004, which seeded the users that existed before it.
 var DefaultAccounts = []TemplateAccount{
-	{"1001", "Bank", "Asset", "Kas & Bank"},
-	{"1002", "Cash", "Asset", "Kas & Bank"},
-	{"1003", "Tabungan", "Asset", "Tabungan"},
-	{"1004", "E-wallet", "Asset", "Kas & Bank"},
-	{"1005", "Investasi", "Asset", "Investasi"},
-	{"1101", "Piutang", "Asset", "Piutang"},
-	{"2101", "Utang", "Liability", "Utang"},
-	{"3001", "Ekuitas Saldo Awal", "Equity", "Ekuitas"},
-	{"4001", "Gaji", "Revenue", "Pendapatan"},
-	{"4002", "Bunga", "Revenue", "Pendapatan"},
-	{"4003", "Pengembalian", "Revenue", "Pendapatan Lain"},
-	{"4199", "Pendapatan Lain-lain", "Revenue", "Pendapatan Lain"},
-	{"5101", "Transportasi", "Expense", "Beban"},
-	{"5102", "Makan", "Expense", "Beban"},
-	{"5103", "Jajan", "Expense", "Beban"},
-	{"5104", "Entertainment", "Expense", "Beban"},
-	{"5105", "Keluarga", "Expense", "Beban"},
-	{"5107", "Admin", "Expense", "Beban"},
-	{"5199", "Beban Tunai Lain-lain", "Expense", "Beban"},
+	{"1001", "Bank", "Asset", "Kas & Bank", "landmark", "blue"},
+	{"1002", "Cash", "Asset", "Kas & Bank", "wallet", "green"},
+	{"1003", "Tabungan", "Asset", "Tabungan", "piggy-bank", "teal"},
+	{"1004", "E-wallet", "Asset", "Kas & Bank", "smartphone", "violet"},
+	{"1005", "Investasi", "Asset", "Investasi", "trending-up", "indigo"},
+	{"1101", "Piutang", "Asset", "Piutang", "hand-coins", "orange"},
+	{"2101", "Utang", "Liability", "Utang", "handshake", "amber"},
+	{"3001", "Ekuitas Saldo Awal", "Equity", "Ekuitas", "scale", "slate"},
+	{"4001", "Gaji", "Revenue", "Pendapatan", "briefcase", "green"},
+	{"4002", "Bunga", "Revenue", "Pendapatan", "percent", "teal"},
+	{"4003", "Pengembalian", "Revenue", "Pendapatan Lain", "rotate-ccw", "sky"},
+	{"4199", "Pendapatan Lain-lain", "Revenue", "Pendapatan Lain", "sparkles", "yellow"},
+	{"5101", "Transportasi", "Expense", "Beban", "car", "sky"},
+	{"5102", "Makan", "Expense", "Beban", "utensils", "orange"},
+	{"5103", "Jajan", "Expense", "Beban", "cookie", "pink"},
+	{"5104", "Entertainment", "Expense", "Beban", "clapperboard", "violet"},
+	{"5105", "Keluarga", "Expense", "Beban", "house", "rose"},
+	{"5107", "Admin", "Expense", "Beban", "receipt", "slate"},
+	{"5199", "Beban Tunai Lain-lain", "Expense", "Beban", "coins", "zinc"},
 }
 
 type CreateAccountRequest struct {
@@ -57,6 +60,8 @@ type CreateAccountRequest struct {
 	Name     string `json:"name" binding:"required,max=100"`
 	Type     string `json:"type" binding:"required,oneof=Asset Liability Equity Revenue Expense"`
 	Category string `json:"category" binding:"max=100"`
+	Icon     string `json:"icon" binding:"omitempty,oneof=wallet landmark piggy-bank smartphone trending-up hand-coins handshake scale briefcase percent rotate-ccw sparkles car utensils cookie clapperboard house receipt coins shopping-cart shopping-bag coffee bus fuel plane heart-pulse graduation-cap baby gift shirt zap wifi phone dumbbell gamepad-2 book paw-print wrench tv credit-card banknote building-2 store"`
+	Color    string `json:"color" binding:"omitempty,oneof=slate zinc red orange amber yellow lime green emerald teal cyan sky blue indigo violet purple fuchsia pink rose"`
 }
 
 func (r *CreateAccountRequest) Normalize() {
@@ -71,6 +76,8 @@ type UpdateAccountRequest struct {
 	Name     *string `json:"name" binding:"omitnil,min=1,max=100"`
 	Category *string `json:"category" binding:"omitnil,max=100"`
 	IsActive *bool   `json:"is_active"`
+	Icon     *string `json:"icon" binding:"omitnil,oneof=wallet landmark piggy-bank smartphone trending-up hand-coins handshake scale briefcase percent rotate-ccw sparkles car utensils cookie clapperboard house receipt coins shopping-cart shopping-bag coffee bus fuel plane heart-pulse graduation-cap baby gift shirt zap wifi phone dumbbell gamepad-2 book paw-print wrench tv credit-card banknote building-2 store"`
+	Color    *string `json:"color" binding:"omitnil,oneof=slate zinc red orange amber yellow lime green emerald teal cyan sky blue indigo violet purple fuchsia pink rose"`
 }
 
 func (r *UpdateAccountRequest) Normalize() {

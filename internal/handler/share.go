@@ -196,4 +196,6 @@ func registerShareRoutes(app *gin.RouterGroup, h *ShareHandler) {
 	app.PUT("/contacts/:id/link", h.LinkContact)
 	app.POST("/loan-requests/:id/approve", h.ApproveLoan)
 	app.POST("/loan-requests/:id/reject", h.RejectLoan)
+	app.POST("/loan-change-requests/:id/approve", h.ApproveChange)
+	app.POST("/loan-change-requests/:id/reject", h.RejectChange)
 }

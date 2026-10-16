@@ -215,6 +215,8 @@ func createLoanRequest(ctx context.Context, tx *sql.Tx, e *model.Entry) error {
 	JOIN journal_lines l ON l.entry_id = e.id
 	JOIN contacts c ON c.id = l.contact_id
 	WHERE e.id = $1 AND c.linked_user_id IS NOT NULL
+	  -- a mirror never asks back, and an entry keeps its one approved request
+	  AND NOT EXISTS (SELECT 1 FROM loan_requests q WHERE q.to_entry_id = e.id OR q.from_entry_id = e.id)
 	GROUP BY e.id, e.user_id, c.linked_user_id
 	HAVING SUM(l.debit - l.credit) <> 0`, e.ID)
 	return err

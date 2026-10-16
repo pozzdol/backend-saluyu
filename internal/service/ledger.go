@@ -13,17 +13,18 @@ import (
 )
 
 var (
-	ErrAccountNotFound  = repository.ErrAccountNotFound
-	ErrAccountCodeTaken = repository.ErrAccountCodeTaken
-	ErrEntryNotFound    = repository.ErrEntryNotFound
-	ErrAccountInactive  = errors.New("account is inactive")
-	ErrSameAccount      = errors.New("from and to account must differ")
-	ErrWrongAccountType = errors.New("account type does not fit this kind of transaction")
-	ErrUnbalanced       = errors.New("journal entry is not balanced")
-	ErrOpeningLocked    = repository.ErrOpeningLocked
-	ErrBooksNotEmpty    = repository.ErrBooksNotEmpty
-	ErrNotOpened        = errors.New("set your opening balance before recording transactions")
-	ErrBeforeStart      = errors.New("date is before the day your books open")
+	ErrAccountNotFound   = repository.ErrAccountNotFound
+	ErrAccountCodeTaken  = repository.ErrAccountCodeTaken
+	ErrEntryNotFound     = repository.ErrEntryNotFound
+	ErrAccountInactive   = errors.New("account is inactive")
+	ErrSameAccount       = errors.New("from and to account must differ")
+	ErrWrongAccountType  = errors.New("account type does not fit this kind of transaction")
+	ErrUnbalanced        = errors.New("journal entry is not balanced")
+	ErrOpeningLocked     = repository.ErrOpeningLocked
+	ErrBooksNotEmpty     = repository.ErrBooksNotEmpty
+	ErrStartAfterEntries = repository.ErrStartAfterEntries
+	ErrNotOpened         = errors.New("set your opening balance before recording transactions")
+	ErrBeforeStart       = errors.New("date is before the day your books open")
 )
 
 // LedgerRepository is what the ledger needs from storage. *repository.LedgerRepository implements it.
@@ -40,7 +41,13 @@ type LedgerRepository interface {
 	StartDate(ctx context.Context, userID uuid.UUID) (*time.Time, error)
 	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)
 	BalanceAsOf(ctx context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error)
-	ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, e *model.Entry) error
+	ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, before, e *model.Entry) error
+	GetEntry(ctx context.Context, userID, id uuid.UUID) (*model.Entry, error)
+	LoanLink(ctx context.Context, entryID uuid.UUID) (status string, requestID uuid.UUID, sender bool, other uuid.UUID, err error)
+	ReplaceEntry(ctx context.Context, userID uuid.UUID, before, after *model.Entry) error
+	Revisions(ctx context.Context, entryID uuid.UUID) ([]model.Revision, error)
+	ProposeChange(ctx context.Context, loanRequestID, userID uuid.UUID, p model.ChangeProposal) error
+	ChangePending(ctx context.Context, loanRequestID uuid.UUID) (bool, error)
 	ListContacts(ctx context.Context, userID uuid.UUID, only *uuid.UUID) ([]model.Contact, error)
 	ContactIDs(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]bool, error)
 	CreateContact(ctx context.Context, userID uuid.UUID, name string) (*model.Contact, error)
@@ -64,7 +71,7 @@ func (s *LedgerService) ListAccounts(ctx context.Context, userID uuid.UUID) ([]m
 
 func (s *LedgerService) CreateAccount(ctx context.Context, userID uuid.UUID, req model.CreateAccountRequest) (*model.Account, error) {
 	a := &model.Account{
-		Code: req.Code, Name: req.Name, Type: req.Type, Category: req.Category,
+		Code: req.Code, Name: req.Name, Type: req.Type, Category: req.Category, Icon: req.Icon, Color: req.Color,
 		NormalBalance: model.NormalBalance(req.Type),
 	}
 	if err := s.repo.CreateAccount(ctx, userID, a); err != nil {
@@ -88,26 +95,38 @@ var kindRules = map[string][2]string{
 // and arrives in `to` (debit). Refunds are income to 4003 Pengembalian, so no form ever
 // credits an expense account and expense balances cannot go negative.
 func (s *LedgerService) PostEntry(ctx context.Context, userID uuid.UUID, req model.PostEntryRequest) (*model.Entry, error) {
+	e, accounts, err := s.buildSimple(ctx, userID, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.post(ctx, userID, e, accounts); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// buildSimple turns the simple form into an entry without saving it; create and edit share it.
+func (s *LedgerService) buildSimple(ctx context.Context, userID uuid.UUID, req model.PostEntryRequest) (*model.Entry, map[uuid.UUID]model.Account, error) {
 	if req.FromAccountID == req.ToAccountID {
-		return nil, ErrSameAccount
+		return nil, nil, ErrSameAccount
 	}
 	date, err := time.Parse(time.DateOnly, req.EntryDate) // format already checked by binding
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	accounts, err := s.repo.FindAccounts(ctx, userID, []uuid.UUID{req.FromAccountID, req.ToAccountID})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	from, okFrom := accounts[req.FromAccountID]
 	to, okTo := accounts[req.ToAccountID]
 	if !okFrom || !okTo {
-		return nil, ErrAccountNotFound
+		return nil, nil, ErrAccountNotFound
 	}
 	rule := kindRules[req.Kind]
 	if from.Type != rule[0] || to.Type != rule[1] {
-		return nil, fmt.Errorf("%w: %s needs %s -> %s", ErrWrongAccountType, req.Kind, rule[0], rule[1])
+		return nil, nil, fmt.Errorf("%w: %s needs %s -> %s", ErrWrongAccountType, req.Kind, rule[0], rule[1])
 	}
 
 	e := &model.Entry{
@@ -123,15 +142,12 @@ func (s *LedgerService) PostEntry(ctx context.Context, userID uuid.UUID, req mod
 	if req.NextPeriod && req.Kind == "income" {
 		day, err := s.repo.PeriodStartDay(ctx, userID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		next := period.For(date, day).Next
 		e.PeriodDate = &next
 	}
-	if err := s.post(ctx, userID, e, accounts); err != nil {
-		return nil, err
-	}
-	return e, nil
+	return e, accounts, nil
 }
 
 // post is the single way a journal entry gets written. Later phases (cash count,

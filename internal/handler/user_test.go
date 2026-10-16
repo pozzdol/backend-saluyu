@@ -79,6 +79,14 @@ func (f *fakeRepo) Update(_ context.Context, id uuid.UUID, req model.UpdateProfi
 	if req.Image != nil {
 		u.Image = *req.Image
 	}
+	if req.Locale != nil {
+		if *req.Locale == "auto" {
+			u.Locale = nil
+		} else {
+			l := *req.Locale
+			u.Locale = &l
+		}
+	}
 	if req.PeriodStartDay != nil {
 		u.PeriodStartDay = *req.PeriodStartDay
 		if f.ledger != nil {

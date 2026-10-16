@@ -19,9 +19,11 @@ type User struct {
 	// StartDate is the day the books open; nil until the opening balance is set.
 	StartDate *time.Time `json:"-"`
 	// PeriodStartDay is the payday (1..28) on which each budgeting period starts.
-	PeriodStartDay int       `json:"-"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	PeriodStartDay int `json:"-"`
+	// Locale is "id" or "en"; nil means follow the browser.
+	Locale    *string   `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type RegisterRequest struct {
@@ -50,6 +52,8 @@ type UpdateProfileRequest struct {
 	Image *string `json:"img_url" binding:"omitnil,url,max=2048"`
 	// Changing it re-slices past periods too: periods are computed, never stored.
 	PeriodStartDay *int `json:"period_start_day" binding:"omitnil,min=1,max=28"`
+	// Locale "auto" clears the choice so the app follows the browser again.
+	Locale *string `json:"locale" binding:"omitnil,oneof=id en auto"`
 }
 
 func (r *UpdateProfileRequest) Normalize() {
@@ -82,6 +86,7 @@ type UserResponse struct {
 	// StartDate as YYYY-MM-DD, or null: the frontend sends a new user to the opening-balance page.
 	StartDate      *string `json:"start_date"`
 	PeriodStartDay int     `json:"period_start_day"`
+	Locale         *string `json:"locale"` // null = follow the browser
 }
 
 // Session is what login and refresh hand out. The refresh token never goes in the JSON body:
@@ -102,6 +107,7 @@ func ToUserResponse(u *User) UserResponse {
 		IsActive:       u.IsActive,
 		StartDate:      DateString(u.StartDate),
 		PeriodStartDay: u.PeriodStartDay,
+		Locale:         u.Locale,
 	}
 }
 

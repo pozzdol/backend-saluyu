@@ -204,6 +204,11 @@ func (f *fakeLedger) createLoanRequest(userID uuid.UUID, e *model.Entry) {
 	if e.Kind != "loan" && e.Kind != "repayment" {
 		return
 	}
+	for _, q := range f.share.requests {
+		if q.fromEntry == e.ID || q.toEntry == e.ID {
+			return // a mirror never asks back, and an entry keeps its one approved request
+		}
+	}
 	var to uuid.UUID
 	var net int64
 	for _, l := range e.Lines {

@@ -83,6 +83,7 @@ type InboxLoan struct {
 type Inbox struct {
 	Invites []InboxInvite `json:"invites"`
 	Loans   []InboxLoan   `json:"loans"`
+	Changes []InboxChange `json:"changes"` // edits to loans already mirrored in my book
 }
 
 type ApproveLoanRequest struct {

@@ -26,13 +26,16 @@ type fakeLedger struct {
 	contacts map[uuid.UUID]map[uuid.UUID]string         // user -> contact id -> name
 	links    map[uuid.UUID]uuid.UUID                    // contact id -> linked user id
 	share    *fakeShare                                 // groups, invites and loan requests
+	revs     map[uuid.UUID][]model.Revision             // entry -> revisions
+	changes  map[uuid.UUID]*fakeChange                  // loan change requests
 }
 
 func newFakeLedger() *fakeLedger {
 	return &fakeLedger{accounts: map[uuid.UUID]map[uuid.UUID]*model.Account{},
 		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{},
 		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{},
-		contacts: map[uuid.UUID]map[uuid.UUID]string{}, links: map[uuid.UUID]uuid.UUID{}, share: newFakeShare()}
+		contacts: map[uuid.UUID]map[uuid.UUID]string{}, links: map[uuid.UUID]uuid.UUID{}, share: newFakeShare(),
+		revs: map[uuid.UUID][]model.Revision{}, changes: map[uuid.UUID]*fakeChange{}}
 }
 
 func (f *fakeLedger) setPeriodStartDay(userID uuid.UUID, day int) {
@@ -149,18 +152,25 @@ func (f *fakeLedger) BalanceAsOf(_ context.Context, userID, accountID uuid.UUID,
 	return b, nil
 }
 
-func (f *fakeLedger) ReplaceOpening(_ context.Context, userID uuid.UUID, startDate time.Time, e *model.Entry) error {
+func (f *fakeLedger) ReplaceOpening(_ context.Context, userID uuid.UUID, startDate time.Time, before, e *model.Entry) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	kept := []*model.Entry{}
 	for _, old := range f.entries[userID] {
+		if old.Kind != "opening" && old.EntryDate.Before(startDate) {
+			return repository.ErrStartAfterEntries
+		}
 		if old.Kind != "opening" {
-			return repository.ErrBooksNotEmpty
+			kept = append(kept, old)
 		}
 	}
 	if e != nil {
-		e.ID, e.EntryNo, e.CreatedAt = uuid.New(), 1, time.Now()
-		kept = append(kept, e)
+		if before != nil {
+			f.revise(userID, before, e)
+		} else {
+			e.ID, e.EntryNo, e.CreatedAt = uuid.New(), int64(len(f.entries[userID])+1), time.Now()
+		}
+		kept = append([]*model.Entry{e}, kept...)
 	}
 	f.entries[userID] = kept
 	f.start[userID] = startDate
@@ -175,7 +185,7 @@ func (f *fakeLedger) userAccounts(userID uuid.UUID) map[uuid.UUID]*model.Account
 	for _, t := range model.DefaultAccounts {
 		id := uuid.New()
 		acc[id] = &model.Account{ID: id, Code: t.Code, Name: t.Name, Type: t.Type, Category: t.Category,
-			NormalBalance: model.NormalBalance(t.Type), IsActive: true}
+			NormalBalance: model.NormalBalance(t.Type), IsActive: true, Icon: t.Icon, Color: t.Color}
 	}
 	f.accounts[userID] = acc
 	return acc
@@ -185,8 +195,17 @@ func (f *fakeLedger) ListAccounts(_ context.Context, userID uuid.UUID) ([]model.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []model.Account{}
+	since := time.Now().AddDate(0, 0, -30)
 	for _, a := range f.userAccounts(userID) {
-		out = append(out, *a)
+		copied := *a
+		for _, e := range f.entries[userID] {
+			for _, l := range e.Lines {
+				if l.AccountID == a.ID && !e.EntryDate.Before(since) {
+					copied.Uses30d++
+				}
+			}
+		}
+		out = append(out, copied)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Code < out[j].Code })
 	return out, nil
@@ -230,6 +249,12 @@ func (f *fakeLedger) UpdateAccount(_ context.Context, userID, id uuid.UUID, req 
 	}
 	if req.IsActive != nil {
 		a.IsActive = *req.IsActive
+	}
+	if req.Icon != nil {
+		a.Icon = *req.Icon
+	}
+	if req.Color != nil {
+		a.Color = *req.Color
 	}
 	copied := *a
 	return &copied, nil
@@ -508,8 +533,9 @@ func TestOpeningAndCashCount(t *testing.T) {
 	code, body = call(t, r, "POST", "/api/v1/entries", tok, entryBody("income", "2026-10-02", 5000000, gaji, bank))
 	expect(t, "entry after opening", code, 201, body)
 
-	code, body = call(t, r, "PUT", "/api/v1/opening", tok, `{"start_date":"2026-10-01","items":[]}`)
-	expect(t, "change opening once books have entries", code, 409, body)
+	// Since phase 6 the opening stays editable, but its date cannot pass the first transaction.
+	code, body = call(t, r, "PUT", "/api/v1/opening", tok, `{"start_date":"2026-10-03","items":[]}`)
+	expect(t, "move start date past the first transaction", code, 409, body)
 	code, body = call(t, r, "GET", "/api/v1/entries", tok, "")
 	for _, e := range body["data"].([]any) {
 		if e := e.(map[string]any); e["kind"] == "opening" {

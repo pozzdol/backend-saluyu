@@ -101,11 +101,8 @@ func (s *LedgerService) GetOpening(ctx context.Context, userID uuid.UUID) (*mode
 	if len(entries) == 1 {
 		o.Entry = &entries[0]
 	}
-	others, _, err := s.repo.ListEntries(ctx, userID, model.EntryFilter{Limit: 2})
-	if err != nil {
-		return nil, err
-	}
-	o.Editable = len(others) == len(entries) // nothing but the opening entry
+	// Always editable now: edits keep a revision, and the start date cannot pass the first entry.
+	o.Editable = true
 	return o, nil
 }
 
@@ -167,7 +164,11 @@ func (s *LedgerService) SetOpening(ctx context.Context, userID uuid.UUID, req mo
 			return nil, err
 		}
 	}
-	if err := s.repo.ReplaceOpening(ctx, userID, start, e); err != nil {
+	current, err := s.GetOpening(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.ReplaceOpening(ctx, userID, start, current.Entry, e); err != nil {
 		return nil, err
 	}
 	return s.GetOpening(ctx, userID)

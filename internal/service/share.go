@@ -39,6 +39,10 @@ type ShareRepository interface {
 	ContactForUser(ctx context.Context, userID, linked uuid.UUID, name string) (uuid.UUID, error)
 	ApproveLoan(ctx context.Context, requestID, userID uuid.UUID, e *model.Entry) (uuid.UUID, error)
 	RejectLoan(ctx context.Context, requestID, userID uuid.UUID) error
+	PendingChanges(ctx context.Context, userID uuid.UUID) ([]model.InboxChange, error)
+	ChangeSource(ctx context.Context, changeID, userID uuid.UUID) (*model.ChangeSource, error)
+	ApplyChange(ctx context.Context, changeID, approver, sender uuid.UUID, senderBefore, senderAfter, mirrorBefore, mirrorAfter *model.Entry) error
+	RejectChange(ctx context.Context, changeID, userID uuid.UUID) error
 }
 
 // ShareService covers phase 5. Every method checks access from the caller's own ID and
@@ -113,7 +117,11 @@ func (s *ShareService) Inbox(ctx context.Context, claims *token.Claims) (*model.
 	if err != nil {
 		return nil, err
 	}
-	return &model.Inbox{Invites: invites, Loans: loans}, nil
+	changes, err := s.repo.PendingChanges(ctx, claims.UserID)
+	if err != nil {
+		return nil, err
+	}
+	return &model.Inbox{Invites: invites, Loans: loans, Changes: changes}, nil
 }
 
 // RespondInvite only works on invites sent to the caller's own email.
@@ -282,4 +290,102 @@ func (s *ShareService) Approve(ctx context.Context, userID, requestID uuid.UUID,
 
 func (s *ShareService) Reject(ctx context.Context, userID, requestID uuid.UUID) error {
 	return s.repo.RejectLoan(ctx, requestID, userID)
+}
+
+// ApproveChange applies another member's edit of a loan to both books at once. My side keeps
+// the account I chose when I first approved the loan; approving twice applies it once.
+func (s *ShareService) ApproveChange(ctx context.Context, userID, changeID uuid.UUID) error {
+	src, err := s.repo.ChangeSource(ctx, changeID, userID)
+	if err != nil {
+		return err
+	}
+	switch src.Status {
+	case "approved":
+		return nil
+	case "pending":
+	default:
+		return ErrLoanNotPending
+	}
+
+	senderBefore, err := s.ledger.repo.GetEntry(ctx, src.FromUserID, src.FromEntryID)
+	if err != nil {
+		return err
+	}
+	mirrorBefore, err := s.ledger.repo.GetEntry(ctx, userID, src.ToEntryID)
+	if err != nil {
+		return err
+	}
+
+	// The sender's new entry, checked against the sender's own accounts.
+	p := src.Proposal.Entry
+	date, err := time.Parse(time.DateOnly, p.Date)
+	if err != nil {
+		return err
+	}
+	senderAfter := &model.Entry{EntryDate: date, Kind: senderBefore.Kind, Description: p.Description, Lines: p.Lines}
+	if p.PeriodDate != nil {
+		pd, err := time.Parse(time.DateOnly, *p.PeriodDate)
+		if err != nil {
+			return err
+		}
+		senderAfter.PeriodDate = &pd
+	}
+	if err := s.validateFor(ctx, src.FromUserID, senderAfter); err != nil {
+		return err
+	}
+
+	// My mirror: same contact and same "my side" account as before, amounts from the proposal.
+	var contactID, own uuid.UUID
+	for _, l := range mirrorBefore.Lines {
+		if l.ContactID != nil {
+			contactID = *l.ContactID
+		} else {
+			own = l.AccountID
+		}
+	}
+	codes, err := s.ledger.byCode(ctx, userID)
+	if err != nil {
+		return err
+	}
+	ids := map[string]uuid.UUID{codeReceivable: codes[codeReceivable].ID, codePayable: codes[codePayable].ID}
+	mirrorDate := date
+	if start, err := s.ledger.repo.StartDate(ctx, userID); err != nil {
+		return err
+	} else if start != nil && mirrorDate.Before(*start) {
+		mirrorDate = *start
+	}
+	mirrorAfter := &model.Entry{
+		EntryDate:   mirrorDate,
+		Kind:        mirrorBefore.Kind,
+		Description: mirrorDescription(mirrorBefore.Kind, netOf(src.Proposal.MirrorLines), src.FromName),
+		Lines:       mirrorLines(src.Proposal.MirrorLines, ids, contactID, own),
+	}
+	if err := s.validateFor(ctx, userID, mirrorAfter); err != nil {
+		return fmt.Errorf("mirror entry: %w", err)
+	}
+	return s.repo.ApplyChange(ctx, changeID, userID, src.FromUserID, senderBefore, senderAfter, mirrorBefore, mirrorAfter)
+}
+
+func (s *ShareService) RejectChange(ctx context.Context, userID, changeID uuid.UUID) error {
+	return s.repo.RejectChange(ctx, changeID, userID)
+}
+
+// validateFor runs validate() with the accounts of the entry's owner.
+func (s *ShareService) validateFor(ctx context.Context, owner uuid.UUID, e *model.Entry) error {
+	ids := make([]uuid.UUID, 0, len(e.Lines))
+	for _, l := range e.Lines {
+		ids = append(ids, l.AccountID)
+	}
+	accounts, err := s.ledger.repo.FindAccounts(ctx, owner, ids)
+	if err != nil {
+		return err
+	}
+	return validate(e, accounts)
+}
+
+func netOf(lines []model.Line) (n int64) {
+	for _, l := range lines {
+		n += l.Debit - l.Credit
+	}
+	return n
 }

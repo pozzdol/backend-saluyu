@@ -32,7 +32,7 @@ func init() {
 func bindJSON(c *gin.Context, req any) bool {
 	body := http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes)
 	if err := json.NewDecoder(body).Decode(req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON body", "code": "invalid_body"})
 		return false
 	}
 
@@ -41,24 +41,40 @@ func bindJSON(c *gin.Context, req any) bool {
 	}
 
 	if err := binding.Validator.ValidateStruct(req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "validation failed", "fields": fieldErrors(err)})
+		text, codes := fieldErrors(err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "validation failed", "code": "validation", "fields": text, "field_codes": codes})
 		return false
 	}
 	return true
 }
 
-// fieldErrors turns validator output into {"email": "must be a valid email"}.
-func fieldErrors(err error) map[string]string {
+// fieldErrors turns validator output into English text ({"email": "must be a valid email"})
+// and stable codes the frontend translates ({"email": "email", "name": "min_len:3"}).
+func fieldErrors(err error) (text, codes map[string]string) {
 	var ve validator.ValidationErrors
 	if !errors.As(err, &ve) {
-		return map[string]string{"body": "is invalid"}
+		return map[string]string{"body": "is invalid"}, map[string]string{"body": "invalid"}
 	}
 
-	out := make(map[string]string, len(ve))
+	text = make(map[string]string, len(ve))
+	codes = make(map[string]string, len(ve))
 	for _, fe := range ve {
-		out[fe.Field()] = fieldMessage(fe)
+		text[fe.Field()] = fieldMessage(fe)
+		codes[fe.Field()] = fieldCode(fe)
 	}
-	return out
+	return text, codes
+}
+
+// fieldCode is the validation tag plus its parameter; min/max on text become min_len/max_len.
+func fieldCode(fe validator.FieldError) string {
+	tag := fe.Tag()
+	if (tag == "min" || tag == "max") && fe.Kind() == reflect.String {
+		tag += "_len"
+	}
+	if fe.Param() != "" {
+		return tag + ":" + fe.Param()
+	}
+	return tag
 }
 
 func fieldMessage(fe validator.FieldError) string {

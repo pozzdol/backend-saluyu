@@ -143,34 +143,71 @@ func loanLines(req model.LoanRequest, receivableID, payableID uuid.UUID, receiva
 
 // PostLoan records money moving between me and a contact.
 func (s *LedgerService) PostLoan(ctx context.Context, userID uuid.UUID, req model.LoanRequest) (*model.Entry, error) {
-	date, err := time.Parse(time.DateOnly, req.EntryDate)
+	e, accounts, c, err := s.buildLoan(ctx, userID, req, nil)
 	if err != nil {
 		return nil, err
 	}
+	if err := s.post(ctx, userID, e, accounts); err != nil {
+		return nil, err
+	}
+	nameContacts(e, c)
+	return e, nil
+}
+
+func nameContacts(e *model.Entry, c *model.Contact) {
+	for i := range e.Lines {
+		if e.Lines[i].ContactID != nil {
+			e.Lines[i].ContactName = c.Name
+		}
+	}
+}
+
+// buildLoan turns a loan form into an entry without saving it. When editing, exclude is the
+// entry being replaced: its own effect is taken out of the balance before the overpayment check.
+func (s *LedgerService) buildLoan(ctx context.Context, userID uuid.UUID, req model.LoanRequest, exclude *model.Entry) (*model.Entry, map[uuid.UUID]model.Account, *model.Contact, error) {
+	date, err := time.Parse(time.DateOnly, req.EntryDate)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	c, err := s.contact(ctx, userID, req.ContactID)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	// A linked contact gets a mirror request, which is only allowed while we share a group.
 	if c.LinkedUserID != nil {
 		ok, err := s.repo.SharesActiveGroup(ctx, userID, *c.LinkedUserID)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 		if !ok {
-			return nil, ErrNotShared
+			return nil, nil, nil, ErrNotShared
 		}
 	}
 	codes, err := s.byCode(ctx, userID)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
+	}
+
+	receivable, payable := c.Receivable, c.Payable
+	if exclude != nil {
+		for _, l := range exclude.Lines {
+			if l.ContactID == nil || *l.ContactID != c.ID {
+				continue
+			}
+			switch l.AccountID {
+			case codes[codeReceivable].ID:
+				receivable -= l.Debit - l.Credit
+			case codes[codePayable].ID:
+				payable -= l.Credit - l.Debit
+			}
+		}
 	}
 
 	// ponytail: balance read outside the insert transaction; one person's book has a single
 	// writer, so a race needs two tabs repaying at once. Lock the contact row if phase 5 adds writers.
-	lines, kind, err := loanLines(req, codes[codeReceivable].ID, codes[codePayable].ID, c.Receivable, c.Payable)
+	lines, kind, err := loanLines(req, codes[codeReceivable].ID, codes[codePayable].ID, receivable, payable)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	ids := make([]uuid.UUID, 0, len(lines))
@@ -179,13 +216,13 @@ func (s *LedgerService) PostLoan(ctx context.Context, userID uuid.UUID, req mode
 	}
 	accounts, err := s.repo.FindAccounts(ctx, userID, ids)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	if a := accounts[req.AccountID]; a.Type != "Asset" || perContact(a.Code) {
-		return nil, fmt.Errorf("%w: money must move through a cash, bank or e-wallet account", ErrWrongAccountType)
+		return nil, nil, nil, fmt.Errorf("%w: money must move through a cash, bank or e-wallet account", ErrWrongAccountType)
 	}
 	if req.ExpenseAccountID != nil && req.MyShare > 0 && accounts[*req.ExpenseAccountID].Type != "Expense" {
-		return nil, fmt.Errorf("%w: your share must go to an expense account", ErrWrongAccountType)
+		return nil, nil, nil, fmt.Errorf("%w: your share must go to an expense account", ErrWrongAccountType)
 	}
 
 	desc := req.Description
@@ -195,14 +232,5 @@ func (s *LedgerService) PostLoan(ctx context.Context, userID uuid.UUID, req mode
 			"lunas_masuk": "Pelunasan dari ", "lunas_keluar": "Pelunasan ke ",
 		}[req.Type] + c.Name
 	}
-	e := &model.Entry{EntryDate: date, Kind: kind, Description: desc, Lines: lines}
-	if err := s.post(ctx, userID, e, accounts); err != nil {
-		return nil, err
-	}
-	for i := range e.Lines {
-		if e.Lines[i].ContactID != nil {
-			e.Lines[i].ContactName = c.Name
-		}
-	}
-	return e, nil
+	return &model.Entry{EntryDate: date, Kind: kind, Description: desc, Lines: lines}, accounts, c, nil
 }

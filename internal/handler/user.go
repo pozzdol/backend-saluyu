@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"errors"
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -119,44 +117,4 @@ func (h *UserHandler) ChangePassword(c *gin.Context) {
 	// Every other device is logged out; this one keeps working with the new session.
 	setRefreshCookie(c, session)
 	c.JSON(http.StatusOK, gin.H{"message": "password updated", "access_token": session.AccessToken})
-}
-
-// fail maps service errors to HTTP status codes in one place.
-// Unknown errors are logged and hidden behind a generic 500.
-func fail(c *gin.Context, op string, err error) {
-	switch {
-	case errors.Is(err, service.ErrEmailTaken):
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrInvalidCredentials), errors.Is(err, service.ErrTokenRevoked),
-		errors.Is(err, service.ErrSessionExpired):
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrUserInactive):
-		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrWrongPassword):
-		// 400, not 401: the token is fine, so the client must not log the user out.
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrPasswordTooLong):
-		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at most 72 bytes"})
-	case errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrAccountNotFound),
-		errors.Is(err, service.ErrEntryNotFound), errors.Is(err, service.ErrContactNotFound),
-		errors.Is(err, service.ErrNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrAccountCodeTaken), errors.Is(err, service.ErrNotOpened),
-		errors.Is(err, service.ErrBooksNotEmpty), errors.Is(err, service.ErrOpeningLocked),
-		errors.Is(err, service.ErrContactNameTaken), errors.Is(err, service.ErrContactHasBalance),
-		errors.Is(err, service.ErrContactHasHistory), errors.Is(err, service.ErrOverpayment),
-		errors.Is(err, service.ErrLoanNotPending), errors.Is(err, service.ErrEntryLocked),
-		errors.Is(err, service.ErrNotShared), errors.Is(err, service.ErrAlreadyLinked):
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrSameAccount), errors.Is(err, service.ErrWrongAccountType),
-		errors.Is(err, service.ErrAccountInactive), errors.Is(err, service.ErrBeforeStart),
-		errors.Is(err, service.ErrNotBalanceSheet), errors.Is(err, service.ErrNeedsContact),
-		errors.Is(err, service.ErrDuplicateAccount), errors.Is(err, service.ErrWrongCounter),
-		errors.Is(err, service.ErrNotExpenseAccount), errors.Is(err, service.ErrContactNotAllowed),
-		errors.Is(err, service.ErrNeedsExpense), errors.Is(err, service.ErrWrongMirror):
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	default:
-		log.Printf("failed to %s: %v", op, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-	}
 }
