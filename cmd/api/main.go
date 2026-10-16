@@ -30,6 +30,7 @@ func main() {
 	sessionRepo := repository.NewSessionRepository(db)
 	userSvc := service.NewUserService(userRepo, sessionRepo, tokenMaker, cfg.RefreshDuration)
 	userHandler := handler.NewUserHandler(userSvc)
+	ledgerHandler := handler.NewLedgerHandler(service.NewLedgerService(repository.NewLedgerRepository(db)))
 
 	r := gin.Default()
 	// Trust no proxy headers: otherwise a client can fake X-Forwarded-For and bypass the rate limit.
@@ -37,7 +38,7 @@ func main() {
 	if err := r.SetTrustedProxies(nil); err != nil {
 		log.Fatal("cannot set trusted proxies:", err)
 	}
-	handler.RegisterRoutes(r, userHandler, tokenMaker)
+	handler.RegisterRoutes(r, userHandler, ledgerHandler, tokenMaker)
 
 	log.Printf("listening on http://localhost%s", cfg.ServerPort)
 	if err := r.Run(cfg.ServerPort); err != nil {

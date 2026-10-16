@@ -137,8 +137,14 @@ func fail(c *gin.Context, op string, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrPasswordTooLong):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at most 72 bytes"})
-	case errors.Is(err, service.ErrUserNotFound):
+	case errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrAccountNotFound),
+		errors.Is(err, service.ErrEntryNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrAccountCodeTaken):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrSameAccount), errors.Is(err, service.ErrWrongAccountType),
+		errors.Is(err, service.ErrAccountInactive):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
 		log.Printf("failed to %s: %v", op, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})

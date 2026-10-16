@@ -8,7 +8,7 @@ import (
 	"github.com/pozzdol/backend-saluyu/internal/token"
 )
 
-func RegisterRoutes(r *gin.Engine, users *UserHandler, tm *token.Maker) {
+func RegisterRoutes(r *gin.Engine, users *UserHandler, ledger *LedgerHandler, tm *token.Maker) {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
@@ -26,4 +26,14 @@ func RegisterRoutes(r *gin.Engine, users *UserHandler, tm *token.Maker) {
 	me.GET("", users.Me)
 	me.PATCH("", users.UpdateProfile)
 	me.PUT("/password", RateLimit(10, time.Minute), users.ChangePassword)
+
+	app := api.Group("", Auth(tm))
+	app.GET("/accounts", ledger.ListAccounts)
+	app.POST("/accounts", ledger.CreateAccount)
+	app.PATCH("/accounts/:id", ledger.UpdateAccount)
+	app.GET("/accounts/:id/ledger", ledger.Ledger)
+	app.GET("/entries", ledger.ListEntries)
+	app.POST("/entries", ledger.PostEntry)
+	app.DELETE("/entries/:id", ledger.DeleteEntry)
+	app.GET("/reports/trial-balance", ledger.TrialBalance)
 }

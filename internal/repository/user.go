@@ -26,20 +26,35 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
+// Create inserts the user and seeds their default chart of accounts in one transaction,
+// so a failed register never leaves a user without accounts.
 func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() // no-op after Commit
+
 	query := `
 	INSERT INTO users (name, email, password, img_url, is_active, password_changed_at)
 	VALUES ($1, $2, $3, $4, $5, $6)
 	RETURNING id, created_at, updated_at
 	`
-	err := r.db.QueryRowContext(ctx, query, user.Name, user.Email, user.Password, user.Image, user.IsActive, user.PasswordChangedAt).
+	err = tx.QueryRowContext(ctx, query, user.Name, user.Email, user.Password, user.Image, user.IsActive, user.PasswordChangedAt).
 		Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
 
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
 		return ErrEmailTaken
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	if err := seedAccounts(ctx, tx, user.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*model.User, error) {

@@ -142,7 +142,8 @@ func newTestServer() (*gin.Engine, *fakeRepo) {
 	sessions := &fakeSessions{rows: map[string]*fakeSession{}}
 	tm := token.NewMaker("test-secret", time.Minute)
 	r := gin.New()
-	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), tm)
+	ledger := NewLedgerHandler(service.NewLedgerService(newFakeLedger()))
+	RegisterRoutes(r, NewUserHandler(service.NewUserService(repo, sessions, tm, time.Hour)), ledger, tm)
 	return r, repo
 }
 
