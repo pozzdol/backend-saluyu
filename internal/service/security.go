@@ -114,19 +114,34 @@ func linkEmail(purpose, lang, name, appURL, tok string) mail.Message {
 		lang = "en"
 	}
 	path := map[string]string{purposeVerify: "/verify-email", purposeReset: "/reset-password"}[purpose]
-	link := appURL + path + "?token=" + tok
-	texts := map[string][2]string{
-		"reset/id": {"Atur ulang password Saluyu",
-			"Halo %s,\n\nKami menerima permintaan untuk mengatur ulang password akun Saluyu-mu. Buka link ini dalam 30 menit:\n\n%s\n\nKalau kamu tidak memintanya, abaikan email ini. Password-mu tidak berubah."},
-		"reset/en": {"Reset your Saluyu password",
-			"Hi %s,\n\nWe received a request to reset the password of your Saluyu account. Open this link within 30 minutes:\n\n%s\n\nIf you did not ask for this, ignore this email. Your password stays the same."},
-		"verify/id": {"Verifikasi email Saluyu",
-			"Halo %s,\n\nBuka link ini untuk memverifikasi emailmu (berlaku 48 jam):\n\n%s\n\nKalau kamu tidak mendaftar di Saluyu, abaikan email ini."},
-		"verify/en": {"Verify your Saluyu email",
-			"Hi %s,\n\nOpen this link to verify your email (valid for 48 hours):\n\n%s\n\nIf you did not sign up for Saluyu, ignore this email."},
+	// subject, title, body, button, expiry, ignore
+	texts := map[string][6]string{
+		"reset/id": {"Atur ulang password Saluyu", "Atur ulang password",
+			"Kami menerima permintaan untuk mengatur ulang password akun Saluyu-mu.",
+			"Atur password baru", "Link ini berlaku 30 menit.",
+			"Kalau kamu tidak memintanya, abaikan email ini. Password-mu tidak berubah."},
+		"reset/en": {"Reset your Saluyu password", "Reset your password",
+			"We received a request to reset the password of your Saluyu account.",
+			"Set a new password", "This link works for 30 minutes.",
+			"If you did not ask for this, ignore this email. Your password stays the same."},
+		"verify/id": {"Verifikasi email Saluyu", "Verifikasi emailmu",
+			"Satu langkah lagi: pastikan email ini milikmu, supaya link reset password bisa sampai kalau kamu lupa password.",
+			"Verifikasi email", "Link ini berlaku 48 jam.",
+			"Kalau kamu tidak mendaftar di Saluyu, abaikan email ini."},
+		"verify/en": {"Verify your Saluyu email", "Verify your email",
+			"One more step: confirm this email is yours, so a reset link can reach you if you forget your password.",
+			"Verify email", "This link works for 48 hours.",
+			"If you did not sign up for Saluyu, ignore this email."},
 	}
 	t := texts[purpose+"/"+lang]
-	return mail.Message{Subject: t[0], Text: fmt.Sprintf(t[1], name, link)}
+	greeting, fallback := "Hi %s,", "Button not working? Paste this link into your browser:"
+	if lang == "id" {
+		greeting, fallback = "Halo %s,", "Tombol tidak bisa dibuka? Salin link ini ke browser:"
+	}
+	return mail.Link{
+		Lang: lang, AppURL: appURL, Subject: t[0], Title: t[1], Greeting: fmt.Sprintf(greeting, name), Body: t[2],
+		Button: t[3], URL: appURL + path + "?token=" + tok, Expiry: t[4], Fallback: fallback, Ignore: t[5],
+	}.Message()
 }
 
 // ListSessions returns the live sessions; refreshToken (the caller's cookie, may be empty) marks the current one.

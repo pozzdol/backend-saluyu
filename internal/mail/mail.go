@@ -5,18 +5,43 @@ package mail
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
+// Message carries both bodies: HTML for mail apps, Text for the rest and for the log.
 type Message struct {
 	To      string
 	Subject string
 	Text    string
+	HTML    string
+}
+
+//go:embed link.html
+var linkHTML string
+var linkTmpl = template.Must(template.New("link").Parse(linkHTML))
+
+// Link is an email whose point is one button (verify, reset). Every field is plain text;
+// the template escapes it, so a user's name cannot inject markup.
+type Link struct {
+	Lang, AppURL, Subject, Title, Greeting, Body, Button, URL, Expiry, Fallback, Ignore string
+}
+
+// Message renders the link email in the app's look, with a matching plain-text body.
+func (l Link) Message() Message {
+	var b bytes.Buffer
+	if err := linkTmpl.Execute(&b, l); err != nil {
+		log.Printf("render link email: %v", err) // the text body still goes out
+	}
+	text := strings.Join([]string{l.Greeting, l.Body, l.URL, l.Expiry, l.Ignore}, "\n\n")
+	return Message{Subject: l.Subject, Text: text, HTML: b.String()}
 }
 
 type Sender interface {
@@ -45,7 +70,11 @@ type Resend struct {
 }
 
 func (r *Resend) Send(ctx context.Context, m Message) error {
-	body, _ := json.Marshal(map[string]any{"from": r.from, "to": []string{m.To}, "subject": m.Subject, "text": m.Text})
+	payload := map[string]any{"from": r.from, "to": []string{m.To}, "subject": m.Subject, "text": m.Text}
+	if m.HTML != "" {
+		payload["html"] = m.HTML
+	}
+	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.resend.com/emails", bytes.NewReader(body))
 	if err != nil {
 		return err
