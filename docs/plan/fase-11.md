@@ -5,7 +5,7 @@ Menjawab sebagian A2, A3, A6, A20, A21, A23–A25, A28, B16, B17, B19, B20 (liha
 Fase 11 di rencana awal terlalu besar untuk satu langkah, jadi dibagi dua:
 
 - **11a (fase ini):** tujuan/sinking fund, tutup buku + jurnal manual + jurnal pembalik, PWA dengan antrean offline Quick Add, berbagi lewat WhatsApp (tagih utang, link undangan grup).
-- **11b (berikutnya, butuh keputusan):** mode gelap (perlu menyapu ±80 warna terang yang ditulis langsung di kelas), lampiran struk (butuh tempat simpan file: disk server atau penyimpanan objek seperti S3/R2), tag, investasi dengan nilai pasar, multi-mata uang, anggaran amplop dengan sisa terbawa.
+- **11b (dipindah):** isinya sudah dibagi ke rencana putaran 2 di [masukan-putaran-2.md](masukan-putaran-2.md): mode gelap → Fase 12, anggaran amplop → Fase 14, investasi dan multi-mata uang → Fase 16, lampiran dan tag → Fase 17. Rincian semula: mode gelap (perlu menyapu ±80 warna terang yang ditulis langsung di kelas), lampiran struk (butuh tempat simpan file: disk server atau penyimpanan objek seperti S3/R2), tag, investasi dengan nilai pasar, multi-mata uang, anggaran amplop dengan sisa terbawa.
 
 ## Definisi selesai (11a)
 1. **Tujuan:** nama, target, tenggat (opsional), akun penampung. Progres = saldo akun penampung; "perlu disisihkan per bulan" = sisa ÷ bulan tersisa. Tampil di Ringkasan.
