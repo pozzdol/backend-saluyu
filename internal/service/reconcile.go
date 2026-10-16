@@ -12,7 +12,7 @@ import (
 
 var (
 	ErrNotBalanceSheet  = errors.New("only asset and liability accounts have an opening or statement balance")
-	ErrNeedsContact     = errors.New("receivables and payables are set per contact (coming in phase 4)")
+	ErrNeedsContact     = errors.New("receivables and payables need a contact")
 	ErrDuplicateAccount = errors.New("an account appears twice")
 	ErrWrongCounter     = errors.New("the difference must go to a revenue or expense account")
 )
@@ -37,10 +37,10 @@ func openingLines(items []model.OpeningItem, accounts map[uuid.UUID]model.Accoun
 			continue
 		}
 		if accounts[it.AccountID].Type == "Asset" {
-			lines = append(lines, model.Line{AccountID: it.AccountID, Debit: it.Amount})
+			lines = append(lines, model.Line{AccountID: it.AccountID, ContactID: it.ContactID, Debit: it.Amount})
 			net += it.Amount
 		} else {
-			lines = append(lines, model.Line{AccountID: it.AccountID, Credit: it.Amount})
+			lines = append(lines, model.Line{AccountID: it.AccountID, ContactID: it.ContactID, Credit: it.Amount})
 			net -= it.Amount
 		}
 	}
@@ -118,12 +118,17 @@ func (s *LedgerService) SetOpening(ctx context.Context, userID uuid.UUID, req mo
 	}
 
 	ids := make([]uuid.UUID, 0, len(req.Items))
-	seen := map[uuid.UUID]bool{}
+	type key struct{ account, contact uuid.UUID }
+	seen := map[key]bool{}
 	for _, it := range req.Items {
-		if seen[it.AccountID] {
+		k := key{account: it.AccountID}
+		if it.ContactID != nil {
+			k.contact = *it.ContactID
+		}
+		if seen[k] {
 			return nil, ErrDuplicateAccount
 		}
-		seen[it.AccountID] = true
+		seen[k] = true
 		ids = append(ids, it.AccountID)
 	}
 	codes, err := s.byCode(ctx, userID)
@@ -135,15 +140,17 @@ func (s *LedgerService) SetOpening(ctx context.Context, userID uuid.UUID, req mo
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range ids {
-		a, ok := accounts[id]
+	for _, it := range req.Items {
+		a, ok := accounts[it.AccountID]
 		switch {
 		case !ok:
 			return nil, ErrAccountNotFound
 		case a.Type != "Asset" && a.Type != "Liability":
 			return nil, fmt.Errorf("%w: %s %s", ErrNotBalanceSheet, a.Code, a.Name)
-		case a.Code == codeReceivable || a.Code == codePayable:
+		case perContact(a.Code) && it.ContactID == nil && it.Amount > 0:
 			return nil, ErrNeedsContact
+		case !perContact(a.Code) && it.ContactID != nil:
+			return nil, ErrContactNotAllowed
 		}
 	}
 	if _, ok := accounts[equity.ID]; !ok {
@@ -154,6 +161,9 @@ func (s *LedgerService) SetOpening(ctx context.Context, userID uuid.UUID, req mo
 	if lines := openingLines(req.Items, accounts, equity.ID); len(lines) > 0 {
 		e = &model.Entry{EntryDate: start, Kind: "opening", Description: "Saldo awal", Lines: lines}
 		if err := validate(e, accounts); err != nil {
+			return nil, err
+		}
+		if err := s.checkContacts(ctx, userID, e); err != nil {
 			return nil, err
 		}
 	}

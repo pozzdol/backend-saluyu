@@ -41,6 +41,12 @@ type LedgerRepository interface {
 	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)
 	BalanceAsOf(ctx context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error)
 	ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, e *model.Entry) error
+	ListContacts(ctx context.Context, userID uuid.UUID, only *uuid.UUID) ([]model.Contact, error)
+	ContactIDs(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]bool, error)
+	CreateContact(ctx context.Context, userID uuid.UUID, name string) (*model.Contact, error)
+	RenameContact(ctx context.Context, userID, id uuid.UUID, name string) error
+	DeleteContact(ctx context.Context, userID, id uuid.UUID) error
+	ContactHistory(ctx context.Context, userID, contactID uuid.UUID) ([]model.ContactLine, error)
 }
 
 type LedgerService struct {
@@ -146,7 +152,33 @@ func (s *LedgerService) post(ctx context.Context, userID uuid.UUID, e *model.Ent
 	if err := validate(e, accounts); err != nil {
 		return err
 	}
+	if err := s.checkContacts(ctx, userID, e); err != nil {
+		return err
+	}
 	return s.repo.CreateEntry(ctx, userID, e)
+}
+
+// checkContacts makes sure every contact on the lines belongs to this user.
+func (s *LedgerService) checkContacts(ctx context.Context, userID uuid.UUID, e *model.Entry) error {
+	var ids []uuid.UUID
+	for _, l := range e.Lines {
+		if l.ContactID != nil {
+			ids = append(ids, *l.ContactID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	owned, err := s.repo.ContactIDs(ctx, userID, ids)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !owned[id] {
+			return ErrContactNotFound
+		}
+	}
+	return nil
 }
 
 // validate checks that every line uses an active account of this user, has exactly one
@@ -163,6 +195,13 @@ func validate(e *model.Entry, accounts map[uuid.UUID]model.Account) error {
 		}
 		if (l.Debit == 0) == (l.Credit == 0) || l.Debit < 0 || l.Credit < 0 {
 			return ErrUnbalanced // a line must have exactly one positive side
+		}
+		// Receivables and payables are per person; nothing else carries a person.
+		if perContact(a.Code) != (l.ContactID != nil) {
+			if l.ContactID == nil {
+				return ErrNeedsContact
+			}
+			return ErrContactNotAllowed
 		}
 		e.Lines[i].Code, e.Lines[i].Name = a.Code, a.Name
 		debit += l.Debit

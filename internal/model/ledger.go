@@ -87,6 +87,9 @@ type Line struct {
 	Name      string    `json:"name"`
 	Debit     int64     `json:"debit"`
 	Credit    int64     `json:"credit"`
+	// ContactID is set only on 1101 Piutang and 2101 Utang lines: who owes, or is owed.
+	ContactID   *uuid.UUID `json:"contact_id"`
+	ContactName string     `json:"contact_name,omitempty"`
 }
 
 type Entry struct {
@@ -170,7 +173,9 @@ type TrialBalance struct {
 
 type OpeningItem struct {
 	AccountID uuid.UUID `json:"account_id" binding:"required"`
-	Amount    int64     `json:"amount" binding:"gte=0"`
+	// ContactID is required for 1101 Piutang and 2101 Utang: one item per person.
+	ContactID *uuid.UUID `json:"contact_id"`
+	Amount    int64      `json:"amount" binding:"gte=0"`
 }
 
 // OpeningRequest sets the real balance of each asset and liability account on the day the books open.

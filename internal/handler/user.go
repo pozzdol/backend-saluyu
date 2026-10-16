@@ -138,16 +138,19 @@ func fail(c *gin.Context, op string, err error) {
 	case errors.Is(err, service.ErrPasswordTooLong):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at most 72 bytes"})
 	case errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrAccountNotFound),
-		errors.Is(err, service.ErrEntryNotFound):
+		errors.Is(err, service.ErrEntryNotFound), errors.Is(err, service.ErrContactNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrAccountCodeTaken), errors.Is(err, service.ErrNotOpened),
-		errors.Is(err, service.ErrBooksNotEmpty), errors.Is(err, service.ErrOpeningLocked):
+		errors.Is(err, service.ErrBooksNotEmpty), errors.Is(err, service.ErrOpeningLocked),
+		errors.Is(err, service.ErrContactNameTaken), errors.Is(err, service.ErrContactHasBalance),
+		errors.Is(err, service.ErrContactHasHistory), errors.Is(err, service.ErrOverpayment):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrSameAccount), errors.Is(err, service.ErrWrongAccountType),
 		errors.Is(err, service.ErrAccountInactive), errors.Is(err, service.ErrBeforeStart),
 		errors.Is(err, service.ErrNotBalanceSheet), errors.Is(err, service.ErrNeedsContact),
 		errors.Is(err, service.ErrDuplicateAccount), errors.Is(err, service.ErrWrongCounter),
-		errors.Is(err, service.ErrNotExpenseAccount):
+		errors.Is(err, service.ErrNotExpenseAccount), errors.Is(err, service.ErrContactNotAllowed),
+		errors.Is(err, service.ErrNeedsExpense):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
 		log.Printf("failed to %s: %v", op, err)

@@ -158,8 +158,8 @@ func insertEntry(ctx context.Context, tx *sql.Tx, userID uuid.UUID, e *model.Ent
 
 	for _, l := range e.Lines {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO journal_lines (entry_id, account_id, debit, credit) VALUES ($1, $2, $3, $4)`,
-			e.ID, l.AccountID, l.Debit, l.Credit); err != nil {
+			`INSERT INTO journal_lines (entry_id, account_id, debit, credit, contact_id) VALUES ($1, $2, $3, $4, $5)`,
+			e.ID, l.AccountID, l.Debit, l.Credit, l.ContactID); err != nil {
 			return err
 		}
 	}
@@ -247,8 +247,10 @@ func (r *LedgerRepository) ListEntries(ctx context.Context, userID uuid.UUID, f 
 	SELECT e.id, e.entry_no, e.entry_date, e.period_date, e.kind, e.description, e.created_at,
 	       (SELECT json_agg(json_build_object(
 	                   'account_id', l.account_id, 'code', a.code, 'name', a.name,
-	                   'debit', l.debit, 'credit', l.credit) ORDER BY l.id)
+	                   'debit', l.debit, 'credit', l.credit,
+	                   'contact_id', l.contact_id, 'contact_name', c.name) ORDER BY l.id)
 	        FROM journal_lines l JOIN accounts a ON a.id = l.account_id
+	        LEFT JOIN contacts c ON c.id = l.contact_id
 	        WHERE l.entry_id = e.id),
 	       COUNT(*) OVER ()
 	FROM journal_entries e

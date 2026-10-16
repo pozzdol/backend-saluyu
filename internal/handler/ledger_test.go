@@ -23,12 +23,14 @@ type fakeLedger struct {
 	start    map[uuid.UUID]time.Time                    // user -> start date
 	startDay map[uuid.UUID]int                          // user -> period_start_day; missing = 25, the column default
 	budgets  map[uuid.UUID][]model.Budget               // user -> budgets, unique per (account, period start)
+	contacts map[uuid.UUID]map[uuid.UUID]string         // user -> contact id -> name
 }
 
 func newFakeLedger() *fakeLedger {
 	return &fakeLedger{accounts: map[uuid.UUID]map[uuid.UUID]*model.Account{},
 		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{},
-		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{}}
+		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{},
+		contacts: map[uuid.UUID]map[uuid.UUID]string{}}
 }
 
 func (f *fakeLedger) setPeriodStartDay(userID uuid.UUID, day int) {
