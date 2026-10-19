@@ -12,9 +12,9 @@ import (
 )
 
 // isCash: money that can be spent now. Receivables wait on other people and investments
-// must be sold first, so both stay out.
+// must be sold first, so both stay out, and so do vehicles and property.
 func isCash(code, typ, category string) bool {
-	return typ == "Asset" && code != "1101" && category != "Investasi"
+	return typ == "Asset" && code != "1101" && category != "Investasi" && category != model.FixedAssetCategory
 }
 
 func (s *ReportService) today() time.Time {

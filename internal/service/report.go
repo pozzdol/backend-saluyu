@@ -170,6 +170,9 @@ func (s *ReportService) Dashboard(ctx context.Context, userID uuid.UUID, date ti
 	}
 	d.Balances = []model.BalanceRow{}
 	for _, a := range activeOf(accounts, "Asset") {
+		if a.IsFixedAsset() {
+			continue // owned, not spendable: shown on the balance sheet and the accounts page
+		}
 		d.Balances = append(d.Balances, model.BalanceRow{AccountID: a.ID, Code: a.Code, Name: a.Name,
 			Category: a.Category, Balance: balance[a.ID]})
 	}

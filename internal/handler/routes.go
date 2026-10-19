@@ -47,6 +47,7 @@ func RegisterRoutes(r *gin.Engine, users *UserHandler, ledger *LedgerHandler, re
 	app.PATCH("/accounts/:id", ledger.UpdateAccount)
 	app.GET("/accounts/:id/ledger", ledger.Ledger)
 	app.GET("/accounts/:id/balance", ledger.Balance)
+	app.POST("/accounts/:id/revalue", ledger.Revalue)
 	app.GET("/opening", ledger.GetOpening)
 	app.PUT("/opening", ledger.SetOpening)
 	app.POST("/cash-counts", ledger.CashCount)

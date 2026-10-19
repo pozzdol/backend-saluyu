@@ -27,6 +27,12 @@ type Account struct {
 // IsCard reports whether purchases may be charged to this account.
 func (a Account) IsCard() bool { return a.Kind == "credit_card" || a.Kind == "paylater" }
 
+// FixedAssetCategory holds vehicles, property and gadgets: owned, but never spendable.
+const FixedAssetCategory = "Aset Tetap"
+
+// IsFixedAsset reports whether the account is a fixed asset (never counted as liquid money).
+func (a Account) IsFixedAsset() bool { return a.Type == "Asset" && a.Category == FixedAssetCategory }
+
 // NormalBalance is the side that increases an account: debit for Asset and Expense, credit for the rest.
 func NormalBalance(accountType string) string {
 	if accountType == "Asset" || accountType == "Expense" {
@@ -46,8 +52,12 @@ var DefaultAccounts = []TemplateAccount{
 	{"1004", "E-wallet", "Asset", "Kas & Bank", "smartphone", "violet"},
 	{"1005", "Investasi", "Asset", "Investasi", "trending-up", "indigo"},
 	{"1101", "Piutang", "Asset", "Piutang", "hand-coins", "orange"},
+	{"1301", "Kendaraan", "Asset", "Aset Tetap", "car", "sky"},
+	{"1302", "Properti", "Asset", "Aset Tetap", "house", "emerald"},
+	{"1303", "Elektronik", "Asset", "Aset Tetap", "tv", "slate"},
 	{"2101", "Utang", "Liability", "Utang", "handshake", "amber"},
 	{"3001", "Ekuitas Saldo Awal", "Equity", "Ekuitas", "scale", "slate"},
+	{"3002", "Penyesuaian Nilai Aset", "Equity", "Ekuitas", "scale", "violet"},
 	{"4001", "Gaji", "Revenue", "Pendapatan", "briefcase", "green"},
 	{"4002", "Bunga", "Revenue", "Pendapatan", "percent", "teal"},
 	{"4003", "Pengembalian", "Revenue", "Pendapatan Lain", "rotate-ccw", "sky"},
@@ -58,7 +68,9 @@ var DefaultAccounts = []TemplateAccount{
 	{"5104", "Hiburan", "Expense", "Beban", "clapperboard", "violet"},
 	{"5105", "Keluarga", "Expense", "Beban", "house", "rose"},
 	{"5107", "Admin", "Expense", "Beban", "receipt", "slate"},
-	{"5108", "Bunga & Denda", "Expense", "Beban", "percent", "red"},
+	{"5108", "Denda & Bunga Lain", "Expense", "Beban", "percent", "red"},
+	{"5111", "Bunga Pinjaman", "Expense", "Beban", "percent", "amber"},
+	{"5112", "Bunga & Denda Kartu", "Expense", "Beban", "credit-card", "red"},
 	{"5199", "Beban Tunai Lain-lain", "Expense", "Beban", "coins", "zinc"},
 }
 
@@ -93,6 +105,12 @@ func (r *UpdateAccountRequest) Normalize() {
 			*p = strings.TrimSpace(*p)
 		}
 	}
+}
+
+// RevalueRequest sets a fixed asset's value on a date; the difference is booked to 3002.
+type RevalueRequest struct {
+	Value     int64  `json:"value" binding:"gte=0"` // sen
+	EntryDate string `json:"entry_date" binding:"required,datetime=2006-01-02"`
 }
 
 type Line struct {

@@ -61,6 +61,8 @@ var apiErrors = []apiError{
 	{service.ErrWrongMirror, http.StatusBadRequest, "wrong_mirror"},
 	{service.ErrWrongFee, http.StatusBadRequest, "wrong_fee"},
 	{service.ErrKindChange, http.StatusBadRequest, "kind_change"},
+	{service.ErrNotFixedAsset, http.StatusBadRequest, "not_fixed_asset"},
+	{service.ErrNoValueChange, http.StatusBadRequest, "no_value_change"},
 	// Forms always build balanced entries; only the line editor can send unbalanced ones.
 	{service.ErrUnbalanced, http.StatusBadRequest, "unbalanced"},
 	{service.ErrWrongEditForm, http.StatusBadRequest, "wrong_edit_form"},
