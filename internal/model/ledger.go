@@ -19,6 +19,9 @@ type Account struct {
 	Icon          string    `json:"icon"`     // lucide icon name, "" = default for the type
 	Color         string    `json:"color"`    // palette token, "" = default for the type
 	Uses30d       int       `json:"uses_30d"` // journal lines in the last 30 days, for "most used first"
+	// HasEntries: the account has at least one journal line. Quick Add hides system
+	// categories (5108, 5199) until they do.
+	HasEntries bool `json:"has_entries"`
 	// Kind is "general", or for liabilities "credit_card", "paylater" (a card with a bill)
 	// or "loan" (an installment plan).
 	Kind string `json:"kind"`
@@ -39,11 +42,13 @@ type TemplateAccount struct{ Code, Name, Type, Category, Icon, Color string }
 
 // DefaultAccounts is the "Pribadi" chart of accounts every new user starts with.
 // Keep in sync with migration 000004, which seeded the users that existed before it.
+// Users seeded before Fase 12 may still have the English names Cash, E-wallet and Admin;
+// the app offers to rename them (the frontend lists the old names).
 var DefaultAccounts = []TemplateAccount{
 	{"1001", "Bank", "Asset", "Kas & Bank", "landmark", "blue"},
-	{"1002", "Cash", "Asset", "Kas & Bank", "wallet", "green"},
+	{"1002", "Tunai", "Asset", "Kas & Bank", "wallet", "green"},
 	{"1003", "Tabungan", "Asset", "Tabungan", "piggy-bank", "teal"},
-	{"1004", "E-wallet", "Asset", "Kas & Bank", "smartphone", "violet"},
+	{"1004", "Dompet Digital", "Asset", "Kas & Bank", "smartphone", "violet"},
 	{"1005", "Investasi", "Asset", "Investasi", "trending-up", "indigo"},
 	{"1101", "Piutang", "Asset", "Piutang", "hand-coins", "orange"},
 	{"2101", "Utang", "Liability", "Utang", "handshake", "amber"},
@@ -57,7 +62,7 @@ var DefaultAccounts = []TemplateAccount{
 	{"5103", "Jajan", "Expense", "Beban", "cookie", "pink"},
 	{"5104", "Hiburan", "Expense", "Beban", "clapperboard", "violet"},
 	{"5105", "Keluarga", "Expense", "Beban", "house", "rose"},
-	{"5107", "Admin", "Expense", "Beban", "receipt", "slate"},
+	{"5107", "Biaya Admin Bank", "Expense", "Beban", "receipt", "slate"},
 	{"5108", "Bunga & Denda", "Expense", "Beban", "percent", "red"},
 	{"5199", "Beban Tunai Lain-lain", "Expense", "Beban", "coins", "zinc"},
 }

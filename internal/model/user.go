@@ -18,8 +18,11 @@ type User struct {
 	PasswordChangedAt time.Time `json:"-"`
 	// StartDate is the day the books open; nil until the opening balance is set.
 	StartDate *time.Time `json:"-"`
-	// PeriodStartDay is the payday (1..28) on which each budgeting period starts.
+	// PeriodStartDay is the payday (1..31) on which each budgeting period starts.
 	PeriodStartDay int `json:"-"`
+	// PeriodMode picks how periods are cut (see period.Config); PeriodWeekday is for weekly.
+	PeriodMode    string `json:"-"`
+	PeriodWeekday int    `json:"-"`
 	// Locale is "id" or "en"; nil means follow the browser.
 	Locale *string `json:"-"`
 	// EmailVerifiedAt is nil until the user opens the link in the verification email.
@@ -60,7 +63,9 @@ type UpdateProfileRequest struct {
 	Name  *string `json:"name" binding:"omitnil,min=3,max=100"`
 	Image *string `json:"img_url" binding:"omitnil,url,max=2048"`
 	// Changing it re-slices past periods too: periods are computed, never stored.
-	PeriodStartDay *int `json:"period_start_day" binding:"omitnil,min=1,max=28"`
+	PeriodStartDay *int    `json:"period_start_day" binding:"omitnil,min=1,max=31"`
+	PeriodMode     *string `json:"period_mode" binding:"omitnil,oneof=payday last_workday calendar_month weekly"`
+	PeriodWeekday  *int    `json:"period_weekday" binding:"omitnil,min=0,max=6"`
 	// Locale "auto" clears the choice so the app follows the browser again.
 	Locale *string `json:"locale" binding:"omitnil,oneof=id en auto"`
 }
@@ -95,6 +100,8 @@ type UserResponse struct {
 	// StartDate as YYYY-MM-DD, or null: the frontend sends a new user to the opening-balance page.
 	StartDate      *string `json:"start_date"`
 	PeriodStartDay int     `json:"period_start_day"`
+	PeriodMode     string  `json:"period_mode"`
+	PeriodWeekday  int     `json:"period_weekday"`
 	Locale         *string `json:"locale"` // null = follow the browser
 	EmailVerified  bool    `json:"email_verified"`
 	TOTPEnabled    bool    `json:"totp_enabled"`
@@ -123,6 +130,8 @@ func ToUserResponse(u *User) UserResponse {
 		IsActive:       u.IsActive,
 		StartDate:      DateString(u.StartDate),
 		PeriodStartDay: u.PeriodStartDay,
+		PeriodMode:     u.PeriodMode,
+		PeriodWeekday:  u.PeriodWeekday,
 		Locale:         u.Locale,
 		EmailVerified:  u.EmailVerifiedAt != nil,
 		TOTPEnabled:    u.TOTPEnabledAt != nil,

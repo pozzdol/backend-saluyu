@@ -17,30 +17,35 @@ type ReportRepository interface {
 	Exporter
 	ListAccounts(ctx context.Context, userID uuid.UUID) ([]model.Account, error)
 	FindAccounts(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]model.Account, error)
-	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)
+	PeriodConfig(ctx context.Context, userID uuid.UUID) (period.Config, error)
 	Movements(ctx context.Context, userID uuid.UUID, from, to time.Time, byPeriodDate bool) ([]model.Movement, error)
 	EffectiveBudgets(ctx context.Context, userID uuid.UUID, periodStart time.Time) ([]model.Budget, error)
 	UpsertBudget(ctx context.Context, userID, accountID uuid.UUID, periodStart time.Time, amount int64) error
 	EntryLines(ctx context.Context, userID uuid.UUID, from, to time.Time) ([]model.EntryLine, error)
+	Plans(ctx context.Context, userID uuid.UUID, id *uuid.UUID) ([]model.Plan, error)
 }
 
 // ReportService computes every figure from journal lines on each request; nothing is stored.
 type ReportService struct {
-	repo ReportRepository
-	now  func() time.Time
+	repo      ReportRepository
+	now       func() time.Time
+	recurring *RecurringService // optional: its upcoming payments lower safe-to-spend
 }
 
 func NewReportService(repo ReportRepository) *ReportService {
 	return &ReportService{repo: repo, now: time.Now}
 }
 
+// UseRecurring lets safe-to-spend subtract the recurring payments still due in the period.
+func (s *ReportService) UseRecurring(r *RecurringService) { s.recurring = r }
+
 // periodOf is the user's payday period containing date.
 func (s *ReportService) periodOf(ctx context.Context, userID uuid.UUID, date time.Time) (period.Period, error) {
-	day, err := s.repo.PeriodStartDay(ctx, userID)
+	cfg, err := s.repo.PeriodConfig(ctx, userID)
 	if err != nil {
 		return period.Period{}, err
 	}
-	return period.For(date, day), nil
+	return period.For(date, cfg), nil
 }
 
 func periodJSON(p period.Period) model.PeriodJSON {
@@ -149,9 +154,12 @@ func (s *ReportService) Dashboard(ctx context.Context, userID uuid.UUID, date ti
 	}
 
 	d := &model.Dashboard{Period: periodJSON(p)}
-	_, d.Income = amounts(moves, ofType("Revenue"))
+	if d.OpeningCash, d.Income, err = s.periodMoney(ctx, userID, p, moves); err != nil {
+		return nil, err
+	}
 	_, d.Expense = amounts(moves, ofType("Expense"))
 	d.Surplus = d.Income - d.Expense
+	d.PeriodMoney = d.OpeningCash + d.Income
 	if d.Income > 0 {
 		d.SavingsRate = float64(d.Surplus) / float64(d.Income)
 	}
@@ -166,6 +174,9 @@ func (s *ReportService) Dashboard(ctx context.Context, userID uuid.UUID, date ti
 	balance := map[uuid.UUID]int64{}
 	for _, m := range held {
 		balance[m.AccountID] += m.Debit - m.Credit
+		if isCash(m.Code, m.Type, m.Category) {
+			d.CashTotal += m.Debit - m.Credit
+		}
 	}
 	d.Balances = []model.BalanceRow{}
 	for _, a := range activeOf(accounts, "Asset") {

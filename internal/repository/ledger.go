@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pozzdol/backend-saluyu/internal/model"
+	"github.com/pozzdol/backend-saluyu/internal/period"
 )
 
 var (
@@ -62,12 +63,13 @@ func scanAccounts(rows *sql.Rows) ([]model.Account, error) {
 }
 
 // ListAccounts also counts each account's journal lines of the last 30 days, so pickers can
-// put the categories a person actually uses first.
+// put the categories a person actually uses first, and tells whether it has any line at all.
 func (r *LedgerRepository) ListAccounts(ctx context.Context, userID uuid.UUID) ([]model.Account, error) {
 	rows, err := r.db.QueryContext(ctx, `
 	SELECT `+accountColumns+`,
 	       (SELECT count(*) FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
-	        WHERE l.account_id = a.id AND e.entry_date >= CURRENT_DATE - 30)
+	        WHERE l.account_id = a.id AND e.entry_date >= CURRENT_DATE - 30),
+	       EXISTS (SELECT 1 FROM journal_lines l WHERE l.account_id = a.id)
 	FROM accounts a WHERE user_id = $1 ORDER BY code`, userID)
 	if err != nil {
 		return nil, err
@@ -76,7 +78,7 @@ func (r *LedgerRepository) ListAccounts(ctx context.Context, userID uuid.UUID) (
 	out := []model.Account{}
 	for rows.Next() {
 		var a model.Account
-		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind, &a.Uses30d); err != nil {
+		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind, &a.Uses30d, &a.HasEntries); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -263,10 +265,12 @@ func (r *LedgerRepository) LockedUntil(ctx context.Context, userID uuid.UUID) (*
 	return d, err
 }
 
-func (r *LedgerRepository) PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error) {
-	var d int
-	err := r.db.QueryRowContext(ctx, `SELECT period_start_day FROM users WHERE id = $1`, userID).Scan(&d)
-	return d, err
+// PeriodConfig is how the user's budgeting periods are cut.
+func (r *LedgerRepository) PeriodConfig(ctx context.Context, userID uuid.UUID) (period.Config, error) {
+	var c period.Config
+	err := r.db.QueryRowContext(ctx, `SELECT period_mode, period_start_day, period_weekday FROM users WHERE id = $1`, userID).
+		Scan(&c.Mode, &c.Day, &c.Weekday)
+	return c, err
 }
 
 // BalanceAsOf is an account's debits minus credits up to and including date.
