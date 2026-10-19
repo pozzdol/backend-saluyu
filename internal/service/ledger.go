@@ -28,6 +28,8 @@ var (
 	ErrStartAfterEntries = repository.ErrStartAfterEntries
 	ErrNotOpened         = errors.New("set your opening balance before recording transactions")
 	ErrBeforeStart       = errors.New("date is before the day your books open")
+	ErrNotFixedAsset     = errors.New("only a fixed asset can be revalued")
+	ErrNoValueChange     = errors.New("the asset already has this value")
 )
 
 // LedgerRepository is what the ledger needs from storage. *repository.LedgerRepository implements it.
@@ -95,12 +97,13 @@ func (s *LedgerService) UpdateAccount(ctx context.Context, userID, id uuid.UUID,
 // fits says whether an account may sit on one side of a simple form. Cards (credit card,
 // paylater) pay for things like a bank account does: the purchase raises the card's debt.
 func fits(kind, side string, a model.Account) bool {
-	money := a.Type == "Asset" || (a.Type == "Liability" && a.IsCard())
+	// Fixed assets are not spendable: they can be bought (transfer/to) or revalued, nothing else.
+	money := (a.Type == "Asset" && !a.IsFixedAsset()) || (a.Type == "Liability" && a.IsCard())
 	switch kind + "/" + side {
 	case "income/from":
 		return a.Type == "Revenue" // Dr Bank / Cr Gaji
 	case "income/to":
-		return a.Type == "Asset"
+		return a.Type == "Asset" && !a.IsFixedAsset()
 	case "expense/from":
 		return money // Dr Makan / Cr Bank, or Cr Kartu Kredit
 	case "expense/to":
@@ -192,6 +195,57 @@ func (s *LedgerService) Reverse(ctx context.Context, userID, id uuid.UUID, date 
 	if err != nil {
 		return nil, err
 	}
+	if err := s.post(ctx, userID, e, accounts); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// Revalue sets a fixed asset's value on a date by posting the difference against 3002
+// Penyesuaian Nilai Aset: Dr asset / Cr 3002 for a gain, the mirror image for a loss.
+func (s *LedgerService) Revalue(ctx context.Context, userID, id uuid.UUID, req model.RevalueRequest) (*model.Entry, error) {
+	date, err := time.Parse(time.DateOnly, req.EntryDate) // format checked by binding
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.repo.ListAccounts(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	accounts := map[uuid.UUID]model.Account{}
+	var asset, equity model.Account
+	for _, a := range list {
+		switch {
+		case a.ID == id:
+			asset = a
+		case a.Code == "3002":
+			equity = a
+		}
+	}
+	if asset.ID == uuid.Nil {
+		return nil, ErrAccountNotFound
+	}
+	if !asset.IsFixedAsset() {
+		return nil, ErrNotFixedAsset
+	}
+	if equity.ID == uuid.Nil || equity.Type != "Equity" {
+		return nil, ErrAccountNotFound
+	}
+	current, err := s.repo.BalanceAsOf(ctx, userID, id, date)
+	if err != nil {
+		return nil, err
+	}
+	diff := req.Value - current
+	if diff == 0 {
+		return nil, ErrNoValueChange
+	}
+	e := &model.Entry{EntryDate: date, Kind: "adjustment", Description: "Perbarui nilai " + asset.Name}
+	if diff > 0 {
+		e.Lines = []model.Line{{AccountID: asset.ID, Debit: diff}, {AccountID: equity.ID, Credit: diff}}
+	} else {
+		e.Lines = []model.Line{{AccountID: equity.ID, Debit: -diff}, {AccountID: asset.ID, Credit: -diff}}
+	}
+	accounts[asset.ID], accounts[equity.ID] = asset, equity
 	if err := s.post(ctx, userID, e, accounts); err != nil {
 		return nil, err
 	}

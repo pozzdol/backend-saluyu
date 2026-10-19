@@ -105,10 +105,13 @@ type PlanRequest struct {
 	TenorMonths       int        `json:"tenor_months" binding:"min=1,max=360"`
 	Method            string     `json:"method" binding:"required,oneof=flat annuity"`
 	FirstDueDate      string     `json:"first_due_date" binding:"required,datetime=2006-01-02"`
-	InterestAccountID *uuid.UUID `json:"interest_account_id"` // default 5108 Bunga & Denda
+	InterestAccountID *uuid.UUID `json:"interest_account_id"` // default 5111 Bunga Pinjaman
 	// ReceivedIntoID records the loan money arriving (an asset) or what it bought (an expense).
 	// Leave it out for a loan that was already running before the books opened.
 	ReceivedIntoID *uuid.UUID `json:"received_into_id"`
+	// AssetAccountID is a fixed asset the loan paid for (a motorbike): the money goes there
+	// instead of ReceivedIntoID, because it never passed through a bank account.
+	AssetAccountID *uuid.UUID `json:"asset_account_id"`
 	EntryDate      string     `json:"entry_date" binding:"omitempty,datetime=2006-01-02"`
 }
 

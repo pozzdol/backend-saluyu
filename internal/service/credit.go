@@ -199,14 +199,21 @@ func (s *CreditService) CreatePlan(ctx context.Context, userID uuid.UUID, req mo
 	}
 
 	var borrowing *model.Entry
-	if req.ReceivedIntoID != nil {
-		found, err := s.repo.FindAccounts(ctx, userID, []uuid.UUID{*req.ReceivedIntoID})
+	target := req.ReceivedIntoID
+	if req.AssetAccountID != nil {
+		target = req.AssetAccountID
+	}
+	if target != nil {
+		found, err := s.repo.FindAccounts(ctx, userID, []uuid.UUID{*target})
 		if err != nil {
 			return nil, err
 		}
-		into, ok := found[*req.ReceivedIntoID]
+		into, ok := found[*target]
 		if !ok {
 			return nil, ErrAccountNotFound
+		}
+		if req.AssetAccountID != nil && !into.IsFixedAsset() {
+			return nil, fmt.Errorf("%w: asset_account_id must be a fixed asset", ErrWrongAccountType)
 		}
 		if into.Type != "Asset" && into.Type != "Expense" {
 			return nil, fmt.Errorf("%w: loan money goes to an asset or pays for an expense", ErrWrongAccountType)
@@ -229,14 +236,14 @@ func (s *CreditService) CreatePlan(ctx context.Context, userID uuid.UUID, req mo
 	return planSummary(p, true), nil
 }
 
-// interestAccount is the chosen expense account, or 5108 Bunga & Denda.
+// interestAccount is the chosen expense account, or 5111 Bunga Pinjaman.
 func (s *CreditService) interestAccount(ctx context.Context, userID uuid.UUID, id *uuid.UUID) (model.Account, error) {
 	list, err := s.repo.ListAccounts(ctx, userID)
 	if err != nil {
 		return model.Account{}, err
 	}
 	for _, a := range list {
-		if (id != nil && a.ID == *id) || (id == nil && a.Code == "5108") {
+		if (id != nil && a.ID == *id) || (id == nil && a.Code == "5111") {
 			if a.Type != "Expense" {
 				return a, fmt.Errorf("%w: interest is an expense", ErrWrongAccountType)
 			}
