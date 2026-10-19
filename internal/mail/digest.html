@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="{{.Lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>{{.Title}}</title>
+</head>
+<body style="margin:0;padding:0;background:#eaf2ff;">
+<div style="display:none;max-height:0;overflow:hidden;">{{.Intro}}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#eaf2ff;">
+<tr><td align="center" style="padding:32px 16px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px;font-family:'Inter','Helvetica Neue',Arial,sans-serif;color:#171717;">
+    <tr><td style="padding:0 4px 20px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="vertical-align:middle;"><img src="{{.AppURL}}/icon-192.png" width="28" height="28" alt="" style="display:block;border:0;border-radius:4px;"></td>
+        <td style="vertical-align:middle;padding-left:8px;font-size:16px;font-weight:600;letter-spacing:-0.01em;color:#171717;">Saluyu</td>
+      </tr></table>
+    </td></tr>
+    <tr><td style="background:#ffffff;border:1px solid #dbe3f0;border-radius:4px;padding:32px;">
+      <h1 style="margin:0 0 16px;font-size:20px;line-height:28px;font-weight:600;letter-spacing:-0.01em;color:#171717;">{{.Title}}</h1>
+      <p style="margin:0 0 8px;font-size:15px;line-height:24px;color:#171717;">{{.Greeting}}</p>
+      <p style="margin:0 0 16px;font-size:15px;line-height:24px;color:#404040;">{{.Intro}}</p>
+      <ul style="margin:0 0 24px;padding-left:20px;font-size:15px;line-height:24px;color:#171717;">
+        {{range .Items}}<li style="margin:0 0 4px;">{{.}}</li>
+        {{end}}</ul>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td bgcolor="#0052d9" style="border-radius:4px;">
+          <a href="{{.URL}}" style="display:inline-block;padding:12px 32px;font-size:15px;line-height:20px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:4px;">{{.Button}}</a>
+        </td>
+      </tr></table>
+    </td></tr>
+    <tr><td style="padding:20px 4px 0;font-size:12px;line-height:18px;color:#737373;">{{.Footer}}</td></tr>
+  </table>
+</td></tr>
+</table>
+</body>
+</html>

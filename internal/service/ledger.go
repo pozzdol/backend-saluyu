@@ -28,6 +28,8 @@ var (
 	ErrStartAfterEntries = repository.ErrStartAfterEntries
 	ErrNotOpened         = errors.New("set your opening balance before recording transactions")
 	ErrBeforeStart       = errors.New("date is before the day your books open")
+	ErrNotFixedAsset     = errors.New("only a fixed asset can be revalued")
+	ErrNoValueChange     = errors.New("the asset already has this value")
 )
 
 // LedgerRepository is what the ledger needs from storage. *repository.LedgerRepository implements it.
@@ -44,10 +46,11 @@ type LedgerRepository interface {
 	CreateEntry(ctx context.Context, userID uuid.UUID, e *model.Entry) error
 	DeleteEntry(ctx context.Context, userID, id uuid.UUID) error
 	ListEntries(ctx context.Context, userID uuid.UUID, f model.EntryFilter) ([]model.Entry, int, error)
+	RunningBalances(ctx context.Context, userID, accountID uuid.UUID, entryIDs []uuid.UUID) (map[uuid.UUID]int64, error)
 	LedgerLines(ctx context.Context, userID, accountID uuid.UUID, from, to *time.Time) (int64, []model.LedgerRow, error)
 	TrialBalanceTotals(ctx context.Context, userID uuid.UUID, asOf time.Time) ([]model.TrialBalanceRow, error)
 	StartDate(ctx context.Context, userID uuid.UUID) (*time.Time, error)
-	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)
+	PeriodConfig(ctx context.Context, userID uuid.UUID) (period.Config, error)
 	BalanceAsOf(ctx context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error)
 	ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, before, e *model.Entry) error
 	GetEntry(ctx context.Context, userID, id uuid.UUID) (*model.Entry, error)
@@ -95,12 +98,13 @@ func (s *LedgerService) UpdateAccount(ctx context.Context, userID, id uuid.UUID,
 // fits says whether an account may sit on one side of a simple form. Cards (credit card,
 // paylater) pay for things like a bank account does: the purchase raises the card's debt.
 func fits(kind, side string, a model.Account) bool {
-	money := a.Type == "Asset" || (a.Type == "Liability" && a.IsCard())
+	// Fixed assets are not spendable: they can be bought (transfer/to) or revalued, nothing else.
+	money := (a.Type == "Asset" && !a.IsFixedAsset()) || (a.Type == "Liability" && a.IsCard())
 	switch kind + "/" + side {
 	case "income/from":
 		return a.Type == "Revenue" // Dr Bank / Cr Gaji
 	case "income/to":
-		return a.Type == "Asset"
+		return a.Type == "Asset" && !a.IsFixedAsset()
 	case "expense/from":
 		return money // Dr Makan / Cr Bank, or Cr Kartu Kredit
 	case "expense/to":
@@ -198,6 +202,57 @@ func (s *LedgerService) Reverse(ctx context.Context, userID, id uuid.UUID, date 
 	return e, nil
 }
 
+// Revalue sets a fixed asset's value on a date by posting the difference against 3002
+// Penyesuaian Nilai Aset: Dr asset / Cr 3002 for a gain, the mirror image for a loss.
+func (s *LedgerService) Revalue(ctx context.Context, userID, id uuid.UUID, req model.RevalueRequest) (*model.Entry, error) {
+	date, err := time.Parse(time.DateOnly, req.EntryDate) // format checked by binding
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.repo.ListAccounts(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	accounts := map[uuid.UUID]model.Account{}
+	var asset, equity model.Account
+	for _, a := range list {
+		switch {
+		case a.ID == id:
+			asset = a
+		case a.Code == "3002":
+			equity = a
+		}
+	}
+	if asset.ID == uuid.Nil {
+		return nil, ErrAccountNotFound
+	}
+	if !asset.IsFixedAsset() {
+		return nil, ErrNotFixedAsset
+	}
+	if equity.ID == uuid.Nil || equity.Type != "Equity" {
+		return nil, ErrAccountNotFound
+	}
+	current, err := s.repo.BalanceAsOf(ctx, userID, id, date)
+	if err != nil {
+		return nil, err
+	}
+	diff := req.Value - current
+	if diff == 0 {
+		return nil, ErrNoValueChange
+	}
+	e := &model.Entry{EntryDate: date, Kind: "adjustment", Description: "Perbarui nilai " + asset.Name}
+	if diff > 0 {
+		e.Lines = []model.Line{{AccountID: asset.ID, Debit: diff}, {AccountID: equity.ID, Credit: diff}}
+	} else {
+		e.Lines = []model.Line{{AccountID: equity.ID, Debit: -diff}, {AccountID: asset.ID, Credit: -diff}}
+	}
+	accounts[asset.ID], accounts[equity.ID] = asset, equity
+	if err := s.post(ctx, userID, e, accounts); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
 // buildSimple turns the simple form into an entry without saving it; create and edit share it.
 func (s *LedgerService) buildSimple(ctx context.Context, userID uuid.UUID, req model.PostEntryRequest) (*model.Entry, map[uuid.UUID]model.Account, error) {
 	if req.FromAccountID == req.ToAccountID {
@@ -253,11 +308,11 @@ func (s *LedgerService) buildSimple(ctx context.Context, userID uuid.UUID, req m
 	}
 	// ponytail: next_period is ignored for other kinds; only early salary needs it.
 	if req.NextPeriod && req.Kind == "income" {
-		day, err := s.repo.PeriodStartDay(ctx, userID)
+		cfg, err := s.repo.PeriodConfig(ctx, userID)
 		if err != nil {
 			return nil, nil, err
 		}
-		next := period.For(date, day).Next
+		next := period.For(date, cfg).Next
 		e.PeriodDate = &next
 	}
 	return e, accounts, nil
@@ -368,8 +423,36 @@ func validate(e *model.Entry, accounts map[uuid.UUID]model.Account) error {
 	return nil
 }
 
+// ListEntries pages the entries; filtered to one account, each row also carries that
+// account's balance after the entry.
 func (s *LedgerService) ListEntries(ctx context.Context, userID uuid.UUID, f model.EntryFilter) ([]model.Entry, int, error) {
-	return s.repo.ListEntries(ctx, userID, f)
+	entries, total, err := s.repo.ListEntries(ctx, userID, f)
+	if err != nil || f.AccountID == nil || len(entries) == 0 {
+		return entries, total, err
+	}
+	found, err := s.repo.FindAccounts(ctx, userID, []uuid.UUID{*f.AccountID})
+	if err != nil {
+		return nil, 0, err
+	}
+	account, ok := found[*f.AccountID]
+	if !ok {
+		return entries, total, nil
+	}
+	ids := make([]uuid.UUID, len(entries))
+	for i, e := range entries {
+		ids[i] = e.ID
+	}
+	balances, err := s.repo.RunningBalances(ctx, userID, account.ID, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range entries {
+		if b, ok := balances[entries[i].ID]; ok {
+			b = signed(account, b)
+			entries[i].BalanceAfter = &b
+		}
+	}
+	return entries, total, nil
 }
 
 func (s *LedgerService) DeleteEntry(ctx context.Context, userID, id uuid.UUID) error {

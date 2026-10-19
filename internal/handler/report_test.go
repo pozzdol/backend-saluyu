@@ -101,8 +101,8 @@ func TestDashboardAndReports(t *testing.T) {
 	if ts := d["to_savings"].([]any); len(ts) != 1 || ts[0].(map[string]any)["code"] != "1003" {
 		t.Fatalf("to_savings: %v", ts)
 	}
-	if n := len(d["budgets"].([]any)); n != 8 {
-		t.Fatalf("budgets has %d rows, want every active expense account (8)", n)
+	if n := len(d["budgets"].([]any)); n != 10 {
+		t.Fatalf("budgets has %d rows, want every active expense account (10)", n)
 	}
 	m := rowOf(t, d["budgets"], makan)
 	wantNum(t, "makan budget", m, "remaining", 30000000)
@@ -189,10 +189,10 @@ func TestPeriodStartDay(t *testing.T) {
 		t.Fatalf("default period_start_day %v, want 25", day)
 	}
 
-	code, body := call(t, r, "PATCH", "/api/v1/me", tok, `{"period_start_day":30}`)
-	expect(t, "period_start_day 30", code, 400, body)
-	if msg := body["fields"].(map[string]any)["period_start_day"]; msg != "must be at most 28" {
-		t.Fatalf("period_start_day 30 message %q", msg)
+	code, body := call(t, r, "PATCH", "/api/v1/me", tok, `{"period_start_day":32}`)
+	expect(t, "period_start_day 32", code, 400, body)
+	if msg := body["fields"].(map[string]any)["period_start_day"]; msg != "must be at most 31" {
+		t.Fatalf("period_start_day 32 message %q", msg)
 	}
 	code, body = call(t, r, "PATCH", "/api/v1/me", tok, `{"period_start_day":10}`)
 	expect(t, "period_start_day 10", code, 200, body)

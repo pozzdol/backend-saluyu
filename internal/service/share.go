@@ -169,7 +169,7 @@ func (s *ShareService) Summary(ctx context.Context, userID, groupID uuid.UUID, d
 			Surplus: d.Surplus, SavingsRate: d.SavingsRate, ToSavings: d.ToSavingsTotal}
 		for _, b := range d.Budgets {
 			if b.Budget > 0 {
-				sum.Budget += b.Budget
+				sum.Budget += b.Available
 				sum.BudgetSpent += b.Actual
 			}
 		}

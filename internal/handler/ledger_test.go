@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/pozzdol/backend-saluyu/internal/model"
+	"github.com/pozzdol/backend-saluyu/internal/period"
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 )
 
@@ -21,7 +22,7 @@ type fakeLedger struct {
 	accounts map[uuid.UUID]map[uuid.UUID]*model.Account // user -> id -> account
 	entries  map[uuid.UUID][]*model.Entry               // user -> entries
 	start    map[uuid.UUID]time.Time                    // user -> start date
-	startDay map[uuid.UUID]int                          // user -> period_start_day; missing = 25, the column default
+	startDay map[uuid.UUID]period.Config                // user -> period settings; missing = payday 25, the column default
 	budgets  map[uuid.UUID][]model.Budget               // user -> budgets, unique per (account, period start)
 	contacts map[uuid.UUID]map[uuid.UUID]string         // user -> contact id -> name
 	links    map[uuid.UUID]uuid.UUID                    // contact id -> linked user id
@@ -44,24 +45,24 @@ func (f *fakeLedger) LockedUntil(_ context.Context, userID uuid.UUID) (*time.Tim
 func newFakeLedger() *fakeLedger {
 	return &fakeLedger{accounts: map[uuid.UUID]map[uuid.UUID]*model.Account{},
 		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{},
-		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{},
+		startDay: map[uuid.UUID]period.Config{}, budgets: map[uuid.UUID][]model.Budget{},
 		contacts: map[uuid.UUID]map[uuid.UUID]string{}, links: map[uuid.UUID]uuid.UUID{}, share: newFakeShare(),
 		revs: map[uuid.UUID][]model.Revision{}, changes: map[uuid.UUID]*fakeChange{}, credit: newFakeCredit(), locked: map[uuid.UUID]time.Time{}}
 }
 
-func (f *fakeLedger) setPeriodStartDay(userID uuid.UUID, day int) {
+func (f *fakeLedger) setPeriod(userID uuid.UUID, c period.Config) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.startDay[userID] = day
+	f.startDay[userID] = c
 }
 
-func (f *fakeLedger) PeriodStartDay(_ context.Context, userID uuid.UUID) (int, error) {
+func (f *fakeLedger) PeriodConfig(_ context.Context, userID uuid.UUID) (period.Config, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if d, ok := f.startDay[userID]; ok {
-		return d, nil
+	if c, ok := f.startDay[userID]; ok {
+		return c, nil
 	}
-	return 25, nil
+	return period.Config{Mode: "payday", Day: 25}, nil
 }
 
 // Movements sums lines per account and kind for entries dated in [from, to), sorted by code like the SQL.
@@ -197,6 +198,9 @@ func (f *fakeLedger) userAccounts(userID uuid.UUID) map[uuid.UUID]*model.Account
 		id := uuid.New()
 		acc[id] = &model.Account{ID: id, Code: t.Code, Name: t.Name, Type: t.Type, Category: t.Category,
 			NormalBalance: model.NormalBalance(t.Type), IsActive: true, Icon: t.Icon, Color: t.Color}
+		if g, ok := model.DefaultNeedGroup[t.Code]; ok {
+			acc[id].NeedGroup = &g
+		}
 	}
 	f.accounts[userID] = acc
 	return acc
@@ -214,6 +218,7 @@ func (f *fakeLedger) ListAccounts(_ context.Context, userID uuid.UUID) ([]model.
 				if l.AccountID == a.ID && !e.EntryDate.Before(since) {
 					copied.Uses30d++
 				}
+				copied.HasEntries = copied.HasEntries || l.AccountID == a.ID
 			}
 		}
 		out = append(out, copied)
@@ -267,6 +272,19 @@ func (f *fakeLedger) UpdateAccount(_ context.Context, userID, id uuid.UUID, req 
 	if req.Color != nil {
 		a.Color = *req.Color
 	}
+	if req.BudgetCarry != nil {
+		if *req.BudgetCarry && !a.BudgetCarry {
+			now := time.Now()
+			a.BudgetCarrySince = &now
+		}
+		a.BudgetCarry = *req.BudgetCarry
+	}
+	if req.NeedGroup != nil {
+		a.NeedGroup = req.NeedGroup
+		if *req.NeedGroup == "none" {
+			a.NeedGroup = nil
+		}
+	}
 	copied := *a
 	return &copied, nil
 }
@@ -312,21 +330,76 @@ func (f *fakeLedger) DeleteEntry(_ context.Context, userID, id uuid.UUID) error 
 	return repository.ErrEntryNotFound
 }
 
-// ListEntries honors only kind and limit: SQL filtering is not what these tests prove.
+// ListEntries honors kind, account and limit, newest first: SQL filtering is not what these tests prove.
 func (f *fakeLedger) ListEntries(_ context.Context, userID uuid.UUID, filter model.EntryFilter) ([]model.Entry, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []model.Entry{}
 	for _, e := range f.entries[userID] {
-		if filter.Kind == nil || e.Kind == *filter.Kind {
-			out = append(out, *e)
+		if filter.Kind != nil && e.Kind != *filter.Kind {
+			continue
 		}
+		if filter.AccountID != nil && !hasLine(e, *filter.AccountID) {
+			continue
+		}
+		out = append(out, *e)
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].EntryDate.Equal(out[j].EntryDate) {
+			return out[i].EntryDate.After(out[j].EntryDate)
+		}
+		return out[i].EntryNo > out[j].EntryNo
+	})
 	total := len(out)
+	if filter.Offset > 0 {
+		out = out[min(filter.Offset, len(out)):]
+	}
 	if filter.Limit > 0 && len(out) > filter.Limit {
 		out = out[:filter.Limit]
 	}
 	return out, total, nil
+}
+
+func hasLine(e *model.Entry, accountID uuid.UUID) bool {
+	for _, l := range e.Lines {
+		if l.AccountID == accountID {
+			return true
+		}
+	}
+	return false
+}
+
+// RunningBalances is the debit-minus-credit balance after each wanted entry, in date then entry_no order.
+func (f *fakeLedger) RunningBalances(_ context.Context, userID, accountID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	all := append([]*model.Entry(nil), f.entries[userID]...)
+	sort.SliceStable(all, func(i, j int) bool {
+		if !all[i].EntryDate.Equal(all[j].EntryDate) {
+			return all[i].EntryDate.Before(all[j].EntryDate)
+		}
+		return all[i].EntryNo < all[j].EntryNo
+	})
+	want := map[uuid.UUID]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := map[uuid.UUID]int64{}
+	var running int64
+	for _, e := range all {
+		if !hasLine(e, accountID) {
+			continue
+		}
+		for _, l := range e.Lines {
+			if l.AccountID == accountID {
+				running += l.Debit - l.Credit
+			}
+		}
+		if want[e.ID] {
+			out[e.ID] = running
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeLedger) LedgerLines(_ context.Context, userID, accountID uuid.UUID, from, _ *time.Time) (int64, []model.LedgerRow, error) {

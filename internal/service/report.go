@@ -17,30 +17,36 @@ type ReportRepository interface {
 	Exporter
 	ListAccounts(ctx context.Context, userID uuid.UUID) ([]model.Account, error)
 	FindAccounts(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]model.Account, error)
-	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)
+	PeriodConfig(ctx context.Context, userID uuid.UUID) (period.Config, error)
 	Movements(ctx context.Context, userID uuid.UUID, from, to time.Time, byPeriodDate bool) ([]model.Movement, error)
 	EffectiveBudgets(ctx context.Context, userID uuid.UUID, periodStart time.Time) ([]model.Budget, error)
 	UpsertBudget(ctx context.Context, userID, accountID uuid.UUID, periodStart time.Time, amount int64) error
 	EntryLines(ctx context.Context, userID uuid.UUID, from, to time.Time) ([]model.EntryLine, error)
+	EntryDays(ctx context.Context, userID uuid.UUID, from time.Time) ([]time.Time, error)
+	Plans(ctx context.Context, userID uuid.UUID, id *uuid.UUID) ([]model.Plan, error)
 }
 
 // ReportService computes every figure from journal lines on each request; nothing is stored.
 type ReportService struct {
-	repo ReportRepository
-	now  func() time.Time
+	repo      ReportRepository
+	now       func() time.Time
+	recurring *RecurringService // optional: its upcoming payments lower safe-to-spend
 }
 
 func NewReportService(repo ReportRepository) *ReportService {
 	return &ReportService{repo: repo, now: time.Now}
 }
 
+// UseRecurring lets safe-to-spend subtract the recurring payments still due in the period.
+func (s *ReportService) UseRecurring(r *RecurringService) { s.recurring = r }
+
 // periodOf is the user's payday period containing date.
 func (s *ReportService) periodOf(ctx context.Context, userID uuid.UUID, date time.Time) (period.Period, error) {
-	day, err := s.repo.PeriodStartDay(ctx, userID)
+	cfg, err := s.repo.PeriodConfig(ctx, userID)
 	if err != nil {
 		return period.Period{}, err
 	}
-	return period.For(date, day), nil
+	return period.For(date, cfg), nil
 }
 
 func periodJSON(p period.Period) model.PeriodJSON {
@@ -97,6 +103,10 @@ func (s *ReportService) budgetRows(ctx context.Context, userID uuid.UUID, p peri
 	if err != nil {
 		return nil, err
 	}
+	carry, err := s.carryOver(ctx, userID, p, accounts)
+	if err != nil {
+		return nil, err
+	}
 	byAccount := make(map[uuid.UUID]model.Budget, len(budgets))
 	for _, b := range budgets {
 		byAccount[b.AccountID] = b
@@ -110,12 +120,73 @@ func (s *ReportService) budgetRows(ctx context.Context, userID uuid.UUID, p peri
 	for _, a := range accounts {
 		b, ok := byAccount[a.ID]
 		row := model.BudgetRow{AccountID: a.ID, Name: a.Name, Budget: b.Amount, Actual: actual[a.ID],
-			Inherited: ok && b.PeriodStart.Before(p.Start)}
-		row.Remaining = row.Budget - row.Actual
-		row.Over = row.Actual > row.Budget
+			Inherited: ok && b.PeriodStart.Before(p.Start), BudgetCarry: a.BudgetCarry, Carry: carry[a.ID], NeedGroup: a.NeedGroup}
+		row.Available = row.Budget + row.Carry
+		row.Remaining = row.Available - row.Actual
+		row.Over = row.Actual > row.Available
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+// maxCarryPeriods bounds how far back carry-over looks (ten years of monthly periods).
+const maxCarryPeriods = 120
+
+// carryOver is, per envelope account, the sum of (budget - spent) over the periods before p
+// that start in or after the period holding the day the envelope was switched on. Negative
+// when earlier periods overspent.
+// ponytail: two queries per past period; precompute per period if envelopes get years of history.
+func (s *ReportService) carryOver(ctx context.Context, userID uuid.UUID, p period.Period, accounts []model.Account) (map[uuid.UUID]int64, error) {
+	out := map[uuid.UUID]int64{}
+	from := map[uuid.UUID]time.Time{} // first period start that counts, per account
+	var earliest time.Time
+	for _, a := range accounts {
+		if !a.BudgetCarry || a.BudgetCarrySince == nil {
+			continue
+		}
+		sp, err := s.periodOf(ctx, userID, *a.BudgetCarrySince)
+		if err != nil {
+			return nil, err
+		}
+		from[a.ID] = sp.Start
+		if earliest.IsZero() || sp.Start.Before(earliest) {
+			earliest = sp.Start
+		}
+	}
+	if len(from) == 0 {
+		return out, nil
+	}
+	cfg, err := s.repo.PeriodConfig(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for k := 1; k <= maxCarryPeriods; k++ {
+		q := period.Back(p, k, cfg)
+		if q.Start.Before(earliest) {
+			break
+		}
+		budgets, err := s.repo.EffectiveBudgets(ctx, userID, q.Start)
+		if err != nil {
+			return nil, err
+		}
+		moves, err := s.periodMoves(ctx, userID, q)
+		if err != nil {
+			return nil, err
+		}
+		left := map[uuid.UUID]int64{}
+		for _, b := range budgets {
+			left[b.AccountID] += b.Amount
+		}
+		for _, m := range moves {
+			left[m.AccountID] -= m.Debit - m.Credit
+		}
+		for id, start := range from {
+			if !q.Start.Before(start) {
+				out[id] += left[id]
+			}
+		}
+	}
+	return out, nil
 }
 
 // activeOf keeps the active accounts of type t, in the given (code) order.
@@ -149,9 +220,12 @@ func (s *ReportService) Dashboard(ctx context.Context, userID uuid.UUID, date ti
 	}
 
 	d := &model.Dashboard{Period: periodJSON(p)}
-	_, d.Income = amounts(moves, ofType("Revenue"))
+	if d.OpeningCash, d.Income, err = s.periodMoney(ctx, userID, p, moves); err != nil {
+		return nil, err
+	}
 	_, d.Expense = amounts(moves, ofType("Expense"))
 	d.Surplus = d.Income - d.Expense
+	d.PeriodMoney = d.OpeningCash + d.Income
 	if d.Income > 0 {
 		d.SavingsRate = float64(d.Surplus) / float64(d.Income)
 	}
@@ -166,13 +240,43 @@ func (s *ReportService) Dashboard(ctx context.Context, userID uuid.UUID, date ti
 	balance := map[uuid.UUID]int64{}
 	for _, m := range held {
 		balance[m.AccountID] += m.Debit - m.Credit
+		if isCash(m.Code, m.Type, m.Category) {
+			d.CashTotal += m.Debit - m.Credit
+		}
 	}
 	d.Balances = []model.BalanceRow{}
 	for _, a := range activeOf(accounts, "Asset") {
+		if a.IsFixedAsset() {
+			continue // owned, not spendable: shown on the balance sheet and the accounts page
+		}
 		d.Balances = append(d.Balances, model.BalanceRow{AccountID: a.ID, Code: a.Code, Name: a.Name,
 			Category: a.Category, Balance: balance[a.ID]})
 	}
+	// ponytail: looks back one year, so a streak longer than that shows as 366.
+	days, err := s.repo.EntryDays(ctx, userID, date.AddDate(-1, 0, -1))
+	if err != nil {
+		return nil, err
+	}
+	d.StreakDays = streakDays(days, date)
 	return d, nil
+}
+
+// streakDays counts consecutive days with an entry, ending on today or, while today is
+// still empty, yesterday. days may come in any order.
+func streakDays(days []time.Time, today time.Time) int {
+	have := make(map[string]bool, len(days))
+	for _, d := range days {
+		have[d.Format(time.DateOnly)] = true
+	}
+	d := today
+	if !have[d.Format(time.DateOnly)] {
+		d = d.AddDate(0, 0, -1)
+	}
+	n := 0
+	for ; have[d.Format(time.DateOnly)]; d = d.AddDate(0, 0, -1) {
+		n++
+	}
+	return n
 }
 
 func (s *ReportService) Budgets(ctx context.Context, userID uuid.UUID, date time.Time) (*model.BudgetList, error) {
@@ -192,7 +296,39 @@ func (s *ReportService) Budgets(ctx context.Context, userID uuid.UUID, date time
 	if err != nil {
 		return nil, err
 	}
-	return &model.BudgetList{Period: periodJSON(p), Rows: rows}, nil
+	list := &model.BudgetList{Period: periodJSON(p), Rows: rows, Groups: groupShares(accounts, moves)}
+	_, list.Income = amounts(moves, ofType("Revenue"))
+	for i := range list.Groups {
+		if list.Income > 0 {
+			list.Groups[i].Share = float64(list.Groups[i].Amount) / float64(list.Income)
+		}
+	}
+	return list, nil
+}
+
+// groupShares totals the period's spending per 50/30/20 group: expense accounts in the
+// group, and money moved by transfer into asset accounts in the savings group (net of
+// transfers back out). Share is filled by the caller once income is known.
+func groupShares(accounts []model.Account, moves []model.Movement) []model.GroupShare {
+	group := map[uuid.UUID]string{}
+	for _, a := range accounts {
+		if a.NeedGroup != nil {
+			group[a.ID] = *a.NeedGroup
+		}
+	}
+	out := []model.GroupShare{{Group: "needs", Target: 0.5}, {Group: "wants", Target: 0.3}, {Group: "savings", Target: 0.2}}
+	for _, m := range moves {
+		g := group[m.AccountID]
+		if g == "" || !(m.Type == "Expense" || (m.Type == "Asset" && m.Kind == "transfer" && g == "savings")) {
+			continue
+		}
+		for i := range out {
+			if out[i].Group == g {
+				out[i].Amount += m.Debit - m.Credit
+			}
+		}
+	}
+	return out
 }
 
 // SetBudget sets the budget from the start of the period containing date onward.

@@ -95,3 +95,25 @@ func (r *LedgerRepository) EntryLines(ctx context.Context, userID uuid.UUID, fro
 	}
 	return out, rows.Err()
 }
+
+// EntryDays lists the distinct days (newest first) from `from` on that have an entry the user
+// recorded themselves: opening balances, cash counts and adjustments do not count.
+func (r *LedgerRepository) EntryDays(ctx context.Context, userID uuid.UUID, from time.Time) ([]time.Time, error) {
+	rows, err := r.db.QueryContext(ctx, `
+	SELECT DISTINCT entry_date FROM journal_entries
+	WHERE user_id = $1 AND entry_date >= $2::date AND kind NOT IN ('opening', 'cash_count', 'adjustment')
+	ORDER BY entry_date DESC`, userID, from)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []time.Time
+	for rows.Next() {
+		var d time.Time
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}

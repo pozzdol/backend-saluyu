@@ -116,6 +116,19 @@ func (h *LedgerHandler) PostJournal(c *gin.Context) {
 	respond(c, "post journal", http.StatusCreated, e, err)
 }
 
+func (h *LedgerHandler) Revalue(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	var req model.RevalueRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	e, err := h.svc.Revalue(c.Request.Context(), currentClaims(c).UserID, id, req)
+	respond(c, "revalue asset", http.StatusCreated, e, err)
+}
+
 func (h *LedgerHandler) Reverse(c *gin.Context) {
 	id, ok := pathID(c)
 	if !ok {

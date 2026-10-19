@@ -292,3 +292,79 @@ func TestInstallmentPlan(t *testing.T) {
 		t.Fatalf("loan balance after the last payment: %d", b)
 	}
 }
+
+func TestLoanForFixedAsset(t *testing.T) {
+	r, _ := newTestServer()
+	tok := signUp(t, r, "motor@x.com")
+	today := time.Now().Format(time.DateOnly)
+	openBooks(t, r, tok, time.Now().AddDate(0, -1, 0).Format(time.DateOnly))
+	acc := accountIDs(t, r, tok)
+
+	// A motorbike loan adds to Kendaraan, never to the bank; the bank is ignored when both are sent.
+	code, body := call(t, r, "POST", "/api/v1/installments", tok, `{"name":"Kredit Motor","principal":1800000000,"annual_rate":12,"tenor_months":12,"method":"flat","first_due_date":"`+today+`","received_into_id":"`+acc["1001"]+`","asset_account_id":"`+acc["1301"]+`"}`)
+	expect(t, "loan for an asset", code, 201, body)
+	planID := body["data"].(map[string]any)["id"].(string)
+	if body["data"].(map[string]any)["interest_account_id"] != acc["5111"] {
+		t.Fatalf("loan interest defaults to 5111 Bunga Pinjaman: %v", body["data"])
+	}
+	_, body = call(t, r, "GET", "/api/v1/accounts/"+acc["1301"]+"/balance?date="+today, tok, "")
+	if b := num(body["data"].(map[string]any)["balance"]); b != 1800000000 {
+		t.Fatalf("Kendaraan balance %d", b)
+	}
+	_, body = call(t, r, "GET", "/api/v1/accounts/"+acc["1001"]+"/balance?date="+today, tok, "")
+	if b := num(body["data"].(map[string]any)["balance"]); b != 0 {
+		t.Fatalf("the bank never saw the money: %d", b)
+	}
+	code, body = call(t, r, "POST", "/api/v1/installments", tok, `{"name":"Salah","principal":100,"annual_rate":0,"tenor_months":1,"method":"flat","first_due_date":"`+today+`","asset_account_id":"`+acc["1001"]+`"}`)
+	if code != 400 || body["code"] != "wrong_account_type" {
+		t.Fatalf("a bank is no fixed asset: %d %v", code, body)
+	}
+
+	// Interest of an installment lands on Bunga Pinjaman.
+	call(t, r, "POST", "/api/v1/entries", tok, `{"kind":"income","entry_date":"`+today+`","amount":500000000,"from_account_id":"`+acc["4001"]+`","to_account_id":"`+acc["1001"]+`"}`)
+	code, body = call(t, r, "POST", "/api/v1/installments/"+planID+"/pay", tok, `{"from_account_id":"`+acc["1001"]+`","entry_date":"`+today+`"}`)
+	expect(t, "pay installment", code, 201, body)
+	entryID := body["data"].(map[string]any)["rows"].([]any)[0].(map[string]any)["paid"].(map[string]any)["entry_id"].(string)
+	_, body = call(t, r, "GET", "/api/v1/entries/"+entryID, tok, "")
+	if !contains(fmt.Sprint(body["data"].(map[string]any)["entry"].(map[string]any)["lines"]), "5111") {
+		t.Fatalf("interest on 5111: %v", body)
+	}
+
+	// Fixed assets are no source or target for daily money.
+	code, body = call(t, r, "POST", "/api/v1/entries", tok, entryBody("expense", today, 100, acc["1301"], acc["5102"]))
+	expect(t, "expense from an asset", code, 400, body)
+	code, body = call(t, r, "POST", "/api/v1/entries", tok, entryBody("income", today, 100, acc["4001"], acc["1301"]))
+	expect(t, "income into an asset", code, 400, body)
+
+	// Revalue down to 1.700.000.000 (Cr Kendaraan / Dr 3002), then up again; the assets
+	// stay out of the dashboard balances but in the balance sheet, which stays balanced.
+	code, body = call(t, r, "POST", "/api/v1/accounts/"+acc["1301"]+"/revalue", tok, `{"value":1700000000,"entry_date":"`+today+`"}`)
+	expect(t, "revalue down", code, 201, body)
+	lines := body["data"].(map[string]any)["lines"].([]any)
+	if len(lines) != 2 || lines[0].(map[string]any)["code"] != "3002" || num(lines[0].(map[string]any)["debit"]) != 100000000 ||
+		lines[1].(map[string]any)["code"] != "1301" || num(lines[1].(map[string]any)["credit"]) != 100000000 {
+		t.Fatalf("revaluation lines: %v", lines)
+	}
+	code, body = call(t, r, "POST", "/api/v1/accounts/"+acc["1301"]+"/revalue", tok, `{"value":1700000000,"entry_date":"`+today+`"}`)
+	if code != 400 || body["code"] != "no_value_change" {
+		t.Fatalf("same value: %d %v", code, body)
+	}
+	code, body = call(t, r, "POST", "/api/v1/accounts/"+acc["1001"]+"/revalue", tok, `{"value":1,"entry_date":"`+today+`"}`)
+	if code != 400 || body["code"] != "not_fixed_asset" {
+		t.Fatalf("only fixed assets: %d %v", code, body)
+	}
+	code, body = call(t, r, "POST", "/api/v1/accounts/"+acc["1301"]+"/revalue", tok, `{"value":1750000000,"entry_date":"`+today+`"}`)
+	expect(t, "revalue up", code, 201, body)
+	if l := body["data"].(map[string]any)["lines"].([]any)[0].(map[string]any); l["code"] != "1301" || num(l["debit"]) != 50000000 {
+		t.Fatalf("gain debits the asset: %v", l)
+	}
+
+	_, body = call(t, r, "GET", "/api/v1/reports/balance-sheet?date="+today, tok, "")
+	if bs := body["data"].(map[string]any); bs["balanced"] != true || !contains(fmt.Sprint(bs["assets"]), "Kendaraan") {
+		t.Fatalf("balance sheet: %v", bs)
+	}
+	_, body = call(t, r, "GET", "/api/v1/dashboard?date="+today, tok, "")
+	if contains(fmt.Sprint(body["data"].(map[string]any)["balances"]), "Kendaraan") {
+		t.Fatalf("a vehicle is not liquid money: %v", body["data"])
+	}
+}

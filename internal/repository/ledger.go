@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pozzdol/backend-saluyu/internal/model"
+	"github.com/pozzdol/backend-saluyu/internal/period"
 )
 
 var (
@@ -22,7 +23,7 @@ var (
 	ErrStartAfterEntries = errors.New("the start date is after your first transaction; pick that date or earlier")
 )
 
-const accountColumns = `id, code, name, type, category, normal_balance, is_active, COALESCE(icon, ''), COALESCE(color, ''), kind`
+const accountColumns = `id, code, name, type, category, normal_balance, is_active, COALESCE(icon, ''), COALESCE(color, ''), kind, budget_carry, budget_carry_since, need_group`
 
 type LedgerRepository struct {
 	db *sql.DB
@@ -35,13 +36,13 @@ func NewLedgerRepository(db *sql.DB) *LedgerRepository {
 // seedAccounts copies the default chart of accounts to a new user inside the register transaction.
 func seedAccounts(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO accounts (user_id, code, name, type, category, normal_balance, icon, color) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
+		`INSERT INTO accounts (user_id, code, name, type, category, normal_balance, icon, color, need_group) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''))`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, a := range model.DefaultAccounts {
-		if _, err := stmt.ExecContext(ctx, userID, a.Code, a.Name, a.Type, a.Category, model.NormalBalance(a.Type), a.Icon, a.Color); err != nil {
+		if _, err := stmt.ExecContext(ctx, userID, a.Code, a.Name, a.Type, a.Category, model.NormalBalance(a.Type), a.Icon, a.Color, model.DefaultNeedGroup[a.Code]); err != nil {
 			return err
 		}
 	}
@@ -53,7 +54,7 @@ func scanAccounts(rows *sql.Rows) ([]model.Account, error) {
 	var out []model.Account
 	for rows.Next() {
 		var a model.Account
-		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind); err != nil {
+		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind, &a.BudgetCarry, &a.BudgetCarrySince, &a.NeedGroup); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -62,12 +63,13 @@ func scanAccounts(rows *sql.Rows) ([]model.Account, error) {
 }
 
 // ListAccounts also counts each account's journal lines of the last 30 days, so pickers can
-// put the categories a person actually uses first.
+// put the categories a person actually uses first, and tells whether it has any line at all.
 func (r *LedgerRepository) ListAccounts(ctx context.Context, userID uuid.UUID) ([]model.Account, error) {
 	rows, err := r.db.QueryContext(ctx, `
 	SELECT `+accountColumns+`,
 	       (SELECT count(*) FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
-	        WHERE l.account_id = a.id AND e.entry_date >= CURRENT_DATE - 30)
+	        WHERE l.account_id = a.id AND e.entry_date >= CURRENT_DATE - 30),
+	       EXISTS (SELECT 1 FROM journal_lines l WHERE l.account_id = a.id)
 	FROM accounts a WHERE user_id = $1 ORDER BY code`, userID)
 	if err != nil {
 		return nil, err
@@ -76,7 +78,7 @@ func (r *LedgerRepository) ListAccounts(ctx context.Context, userID uuid.UUID) (
 	out := []model.Account{}
 	for rows.Next() {
 		var a model.Account
-		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind, &a.Uses30d); err != nil {
+		if err := rows.Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind, &a.BudgetCarry, &a.BudgetCarrySince, &a.NeedGroup, &a.Uses30d, &a.HasEntries); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -127,10 +129,15 @@ func (r *LedgerRepository) UpdateAccount(ctx context.Context, userID, id uuid.UU
 	UPDATE accounts
 	SET name = COALESCE($3, name), category = COALESCE($4, category),
 	    is_active = COALESCE($5, is_active), icon = COALESCE($6, icon), color = COALESCE($7, color),
+	    budget_carry_since = CASE WHEN $8::bool IS NULL THEN budget_carry_since
+	                              WHEN $8 AND NOT budget_carry THEN CURRENT_DATE
+	                              WHEN $8 THEN budget_carry_since END,
+	    budget_carry = COALESCE($8, budget_carry),
+	    need_group = CASE WHEN $9::text IS NULL THEN need_group WHEN $9 = 'none' THEN NULL ELSE $9 END,
 	    updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+accountColumns, id, userID, req.Name, req.Category, req.IsActive, req.Icon, req.Color).
-		Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind)
+	RETURNING `+accountColumns, id, userID, req.Name, req.Category, req.IsActive, req.Icon, req.Color, req.BudgetCarry, req.NeedGroup).
+		Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind, &a.BudgetCarry, &a.BudgetCarrySince, &a.NeedGroup)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrAccountNotFound
 	}
@@ -263,10 +270,12 @@ func (r *LedgerRepository) LockedUntil(ctx context.Context, userID uuid.UUID) (*
 	return d, err
 }
 
-func (r *LedgerRepository) PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error) {
-	var d int
-	err := r.db.QueryRowContext(ctx, `SELECT period_start_day FROM users WHERE id = $1`, userID).Scan(&d)
-	return d, err
+// PeriodConfig is how the user's budgeting periods are cut.
+func (r *LedgerRepository) PeriodConfig(ctx context.Context, userID uuid.UUID) (period.Config, error) {
+	var c period.Config
+	err := r.db.QueryRowContext(ctx, `SELECT period_mode, period_start_day, period_weekday FROM users WHERE id = $1`, userID).
+		Scan(&c.Mode, &c.Day, &c.Weekday)
+	return c, err
 }
 
 // BalanceAsOf is an account's debits minus credits up to and including date.
@@ -361,6 +370,39 @@ func (r *LedgerRepository) ListEntries(ctx context.Context, userID uuid.UUID, f 
 		out = append(out, e)
 	}
 	return out, total, rows.Err()
+}
+
+// RunningBalances returns the debit-minus-credit balance of one account right after each of
+// the given entries (ordered by date, then entry number). Entries without a line on the
+// account are missing from the map.
+// ponytail: the window runs over the account's whole history on every page; fine for a
+// personal ledger, keep a balance column if accounts reach millions of lines.
+func (r *LedgerRepository) RunningBalances(ctx context.Context, userID, accountID uuid.UUID, entryIDs []uuid.UUID) (map[uuid.UUID]int64, error) {
+	ids := make([]string, len(entryIDs))
+	for i, id := range entryIDs {
+		ids[i] = id.String()
+	}
+	rows, err := r.db.QueryContext(ctx, `
+	SELECT id, balance FROM (
+	  SELECT e.id, SUM(SUM(l.debit - l.credit)) OVER (ORDER BY e.entry_date, e.entry_no) AS balance
+	  FROM journal_entries e JOIN journal_lines l ON l.entry_id = e.id
+	  WHERE e.user_id = $1 AND l.account_id = $2
+	  GROUP BY e.id, e.entry_date, e.entry_no) t
+	WHERE id = ANY($3::uuid[])`, userID, accountID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]int64, len(entryIDs))
+	for rows.Next() {
+		var id uuid.UUID
+		var b int64
+		if err := rows.Scan(&id, &b); err != nil {
+			return nil, err
+		}
+		out[id] = b
+	}
+	return out, rows.Err()
 }
 
 // LedgerLines returns the raw debit/credit lines of one account in date order, plus the

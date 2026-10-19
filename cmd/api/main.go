@@ -58,9 +58,14 @@ func main() {
 	}
 	creditHandler := handler.NewCreditHandler(service.NewCreditService(ledgerRepo, ledgerSvc))
 	recurringSvc := service.NewRecurringService(ledgerRepo, ledgerSvc)
+	reportSvc.UseRecurring(recurringSvc)
 	recurringSvc.StartJob(context.Background(), time.Hour)
 	automationHandler := handler.NewAutomationHandler(recurringSvc, service.NewImportService(ledgerRepo, ledgerSvc))
 	handler.RegisterRoutes(r, userHandler, ledgerHandler, reportHandler, shareHandler, creditHandler, automationHandler, tokenMaker)
+	notifySvc := service.NewNotifyService(repository.NewNotifyRepository(db), reportSvc, recurringSvc,
+		service.NewCreditService(ledgerRepo, ledgerSvc), mail.New(cfg.ResendAPIKey, cfg.MailFrom), cfg.AppURL)
+	notifySvc.StartJob(context.Background(), time.Hour)
+	handler.RegisterNotifyRoutes(r, handler.NewNotifyHandler(notifySvc), tokenMaker)
 
 	log.Printf("listening on http://localhost%s", cfg.ServerPort)
 	if err := r.Run(cfg.ServerPort); err != nil {

@@ -36,6 +36,21 @@ type BudgetRow struct {
 	Remaining int64     `json:"remaining"`
 	Over      bool      `json:"over"`
 	Inherited bool      `json:"inherited"` // budget was set in an earlier period and carries forward
+	// With the envelope on, Carry is the accumulated (budget - spent) of earlier periods and
+	// Available = Budget + Carry; otherwise Carry is 0 and Available = Budget. Remaining and
+	// Over are measured against Available.
+	BudgetCarry bool    `json:"budget_carry"`
+	Carry       int64   `json:"carry"`
+	Available   int64   `json:"available"`
+	NeedGroup   *string `json:"need_group"`
+}
+
+// GroupShare is one 50/30/20 group: what the period spent on it and its share of income.
+type GroupShare struct {
+	Group  string  `json:"group"` // needs, wants or savings
+	Amount int64   `json:"amount"`
+	Share  float64 `json:"share"`  // Amount / income, 0 without income
+	Target float64 `json:"target"` // 0.5, 0.3 or 0.2
 }
 
 type BalanceRow struct {
@@ -56,11 +71,20 @@ type Dashboard struct {
 	ToSavingsTotal int64        `json:"to_savings_total"`
 	Budgets        []BudgetRow  `json:"budgets"`
 	Balances       []BalanceRow `json:"balances"`
+	// StreakDays: consecutive days (ending today or yesterday) with an entry the user recorded.
+	StreakDays int `json:"streak_days"`
+	// OpeningCash is spendable cash at the period's start; PeriodMoney adds the period's
+	// income. Spending past PeriodMoney is a deficit, not spending past income.
+	OpeningCash int64 `json:"opening_cash"`
+	PeriodMoney int64 `json:"period_money"`
+	CashTotal   int64 `json:"cash_total"` // "total uangku": every cash, bank, e-wallet and savings balance
 }
 
 type BudgetList struct {
-	Period PeriodJSON  `json:"period"`
-	Rows   []BudgetRow `json:"rows"`
+	Period PeriodJSON   `json:"period"`
+	Rows   []BudgetRow  `json:"rows"`
+	Income int64        `json:"income"`
+	Groups []GroupShare `json:"groups"`
 }
 
 // BudgetRequest sets the budget of the period containing Date; it holds until changed.
@@ -140,7 +164,14 @@ type SafePerDay struct {
 	Amount    int64  `json:"amount"`
 	Remaining int64  `json:"remaining"`
 	DaysLeft  int    `json:"days_left"`
-	Basis     string `json:"basis"` // budget (unspent budgets) or surplus (income minus spending)
+	Basis     string `json:"basis"` // budget (unspent budgets, capped by cash) or period_money (cash minus bills)
+	// Remaining = Cash - Scheduled for period_money. Cash is spendable cash now; Scheduled is
+	// card debt plus installments and recurring payments due by the period's end.
+	Cash        int64 `json:"cash"`
+	Scheduled   int64 `json:"scheduled"`
+	OpeningCash int64 `json:"opening_cash"`
+	PeriodMoney int64 `json:"period_money"` // OpeningCash + the period's income
+	Deficit     bool  `json:"deficit"`      // spending passed PeriodMoney
 }
 
 // Insight is one observation; the frontend words it in the user's language.

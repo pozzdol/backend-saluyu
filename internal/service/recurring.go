@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pozzdol/backend-saluyu/internal/model"
+	"github.com/pozzdol/backend-saluyu/internal/period"
 	"github.com/pozzdol/backend-saluyu/internal/recurring"
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 )
@@ -20,7 +21,7 @@ var (
 )
 
 type RecurringRepository interface {
-	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)
+	PeriodConfig(ctx context.Context, userID uuid.UUID) (period.Config, error)
 	SaveRule(ctx context.Context, rule *model.RecurringRule) error
 	DeleteRule(ctx context.Context, userID, id uuid.UUID) error
 	Rules(ctx context.Context, userID uuid.UUID) ([]model.RecurringRule, error)
@@ -53,11 +54,21 @@ func (s *RecurringService) pattern(ctx context.Context, r model.RecurringRule) (
 		p.Day = *r.Day
 	}
 	if r.Frequency == "payday" {
-		day, err := s.repo.PeriodStartDay(ctx, r.UserID)
+		cfg, err := s.repo.PeriodConfig(ctx, r.UserID)
 		if err != nil {
 			return p, err
 		}
-		p.Day = day
+		// Payday rules fall on the first day of each period, whatever the period mode.
+		switch cfg.Mode {
+		case "weekly":
+			p.Frequency, p.Day = "weekly", cfg.Weekday
+		case "calendar_month":
+			p.Day = 1
+		case "last_workday":
+			p.Frequency = "last_workday"
+		default:
+			p.Day = cfg.Day
+		}
 	}
 	return p, nil
 }
@@ -121,6 +132,26 @@ func (s *RecurringService) open(ctx context.Context, r model.RecurringRule, unti
 	for _, d := range p.Between(next, until) {
 		if !handled[d.Format(time.DateOnly)] {
 			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+// Upcoming lists the open occurrences of the user's rules up to and including until,
+// overdue reminders included. Unlike Due it posts nothing.
+func (s *RecurringService) Upcoming(ctx context.Context, userID uuid.UUID, until time.Time) ([]model.DueOccurrence, error) {
+	rules, err := s.repo.Rules(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	var out []model.DueOccurrence
+	for _, r := range rules {
+		dates, err := s.open(ctx, r, until)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range dates {
+			out = append(out, model.DueOccurrence{Rule: r, DueDate: d.Format(time.DateOnly)})
 		}
 	}
 	return out, nil
