@@ -22,6 +22,11 @@ type Account struct {
 	// Kind is "general", or for liabilities "credit_card", "paylater" (a card with a bill)
 	// or "loan" (an installment plan).
 	Kind string `json:"kind"`
+	// BudgetCarry rolls the unspent budget into the next period (envelope); BudgetCarrySince
+	// is the day it was switched on. NeedGroup is the 50/30/20 group: needs, wants, savings or nil.
+	BudgetCarry      bool       `json:"budget_carry"`
+	BudgetCarrySince *time.Time `json:"-"`
+	NeedGroup        *string    `json:"need_group"`
 }
 
 // IsCard reports whether purchases may be charged to this account.
@@ -62,6 +67,13 @@ var DefaultAccounts = []TemplateAccount{
 	{"5199", "Beban Tunai Lain-lain", "Expense", "Beban", "coins", "zinc"},
 }
 
+// DefaultNeedGroup is the 50/30/20 group of the template accounts, by code.
+var DefaultNeedGroup = map[string]string{
+	"5101": "needs", "5102": "needs", "5105": "needs", "5107": "needs",
+	"5103": "wants", "5104": "wants",
+	"1003": "savings", "1005": "savings",
+}
+
 type CreateAccountRequest struct {
 	Code     string `json:"code" binding:"required,numeric,max=20"`
 	Name     string `json:"name" binding:"required,max=100"`
@@ -85,6 +97,9 @@ type UpdateAccountRequest struct {
 	IsActive *bool   `json:"is_active"`
 	Icon     *string `json:"icon" binding:"omitnil,oneof=wallet landmark piggy-bank smartphone trending-up hand-coins handshake scale briefcase percent rotate-ccw sparkles car utensils cookie clapperboard house receipt coins shopping-cart shopping-bag coffee bus fuel plane heart-pulse graduation-cap baby gift shirt zap wifi phone dumbbell gamepad-2 book paw-print wrench tv credit-card banknote building-2 store"`
 	Color    *string `json:"color" binding:"omitnil,oneof=slate zinc red orange amber yellow lime green emerald teal cyan sky blue indigo violet purple fuchsia pink rose"`
+	// BudgetCarry switches the envelope on or off. NeedGroup "none" clears the 50/30/20 group.
+	BudgetCarry *bool   `json:"budget_carry"`
+	NeedGroup   *string `json:"need_group" binding:"omitnil,oneof=needs wants savings none"`
 }
 
 func (r *UpdateAccountRequest) Normalize() {
@@ -121,6 +136,9 @@ type Entry struct {
 	Lines         []Line     `json:"lines"`
 	// ClientID is chosen by a client that may send the same entry twice (an offline queue).
 	ClientID *uuid.UUID `json:"client_id,omitempty"`
+	// BalanceAfter is the balance of the filtered account after this entry; set only when
+	// the list is filtered to one account.
+	BalanceAfter *int64 `json:"balance_after,omitempty"`
 }
 
 // PostEntryRequest is the simple form: money moves from one account to another.

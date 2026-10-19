@@ -36,6 +36,21 @@ type BudgetRow struct {
 	Remaining int64     `json:"remaining"`
 	Over      bool      `json:"over"`
 	Inherited bool      `json:"inherited"` // budget was set in an earlier period and carries forward
+	// With the envelope on, Carry is the accumulated (budget - spent) of earlier periods and
+	// Available = Budget + Carry; otherwise Carry is 0 and Available = Budget. Remaining and
+	// Over are measured against Available.
+	BudgetCarry bool    `json:"budget_carry"`
+	Carry       int64   `json:"carry"`
+	Available   int64   `json:"available"`
+	NeedGroup   *string `json:"need_group"`
+}
+
+// GroupShare is one 50/30/20 group: what the period spent on it and its share of income.
+type GroupShare struct {
+	Group  string  `json:"group"` // needs, wants or savings
+	Amount int64   `json:"amount"`
+	Share  float64 `json:"share"`  // Amount / income, 0 without income
+	Target float64 `json:"target"` // 0.5, 0.3 or 0.2
 }
 
 type BalanceRow struct {
@@ -59,8 +74,10 @@ type Dashboard struct {
 }
 
 type BudgetList struct {
-	Period PeriodJSON  `json:"period"`
-	Rows   []BudgetRow `json:"rows"`
+	Period PeriodJSON   `json:"period"`
+	Rows   []BudgetRow  `json:"rows"`
+	Income int64        `json:"income"`
+	Groups []GroupShare `json:"groups"`
 }
 
 // BudgetRequest sets the budget of the period containing Date; it holds until changed.

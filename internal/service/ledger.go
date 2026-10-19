@@ -44,6 +44,7 @@ type LedgerRepository interface {
 	CreateEntry(ctx context.Context, userID uuid.UUID, e *model.Entry) error
 	DeleteEntry(ctx context.Context, userID, id uuid.UUID) error
 	ListEntries(ctx context.Context, userID uuid.UUID, f model.EntryFilter) ([]model.Entry, int, error)
+	RunningBalances(ctx context.Context, userID, accountID uuid.UUID, entryIDs []uuid.UUID) (map[uuid.UUID]int64, error)
 	LedgerLines(ctx context.Context, userID, accountID uuid.UUID, from, to *time.Time) (int64, []model.LedgerRow, error)
 	TrialBalanceTotals(ctx context.Context, userID uuid.UUID, asOf time.Time) ([]model.TrialBalanceRow, error)
 	StartDate(ctx context.Context, userID uuid.UUID) (*time.Time, error)
@@ -368,8 +369,36 @@ func validate(e *model.Entry, accounts map[uuid.UUID]model.Account) error {
 	return nil
 }
 
+// ListEntries pages the entries; filtered to one account, each row also carries that
+// account's balance after the entry.
 func (s *LedgerService) ListEntries(ctx context.Context, userID uuid.UUID, f model.EntryFilter) ([]model.Entry, int, error) {
-	return s.repo.ListEntries(ctx, userID, f)
+	entries, total, err := s.repo.ListEntries(ctx, userID, f)
+	if err != nil || f.AccountID == nil || len(entries) == 0 {
+		return entries, total, err
+	}
+	found, err := s.repo.FindAccounts(ctx, userID, []uuid.UUID{*f.AccountID})
+	if err != nil {
+		return nil, 0, err
+	}
+	account, ok := found[*f.AccountID]
+	if !ok {
+		return entries, total, nil
+	}
+	ids := make([]uuid.UUID, len(entries))
+	for i, e := range entries {
+		ids[i] = e.ID
+	}
+	balances, err := s.repo.RunningBalances(ctx, userID, account.ID, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range entries {
+		if b, ok := balances[entries[i].ID]; ok {
+			b = signed(account, b)
+			entries[i].BalanceAfter = &b
+		}
+	}
+	return entries, total, nil
 }
 
 func (s *LedgerService) DeleteEntry(ctx context.Context, userID, id uuid.UUID) error {

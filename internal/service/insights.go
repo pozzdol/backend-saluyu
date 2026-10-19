@@ -72,10 +72,10 @@ func (s *ReportService) Insights(ctx context.Context, userID uuid.UUID, date tim
 		budgeted = true
 		unspent += max(b.Remaining, 0)
 		switch {
-		case b.Actual > b.Budget:
-			out.BudgetAlerts = append(out.BudgetAlerts, model.BudgetAlert{AccountID: b.AccountID, Name: b.Name, Budget: b.Budget, Actual: b.Actual, Level: "over"})
-		case b.Actual*10 >= b.Budget*8:
-			out.BudgetAlerts = append(out.BudgetAlerts, model.BudgetAlert{AccountID: b.AccountID, Name: b.Name, Budget: b.Budget, Actual: b.Actual, Level: "warn"})
+		case b.Actual > b.Available:
+			out.BudgetAlerts = append(out.BudgetAlerts, model.BudgetAlert{AccountID: b.AccountID, Name: b.Name, Budget: b.Available, Actual: b.Actual, Level: "over"})
+		case b.Actual*10 >= b.Available*8:
+			out.BudgetAlerts = append(out.BudgetAlerts, model.BudgetAlert{AccountID: b.AccountID, Name: b.Name, Budget: b.Available, Actual: b.Actual, Level: "warn"})
 		}
 	}
 	safe := model.SafePerDay{Basis: "budget", Remaining: unspent}
