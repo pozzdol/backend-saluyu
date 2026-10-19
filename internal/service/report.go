@@ -22,6 +22,7 @@ type ReportRepository interface {
 	EffectiveBudgets(ctx context.Context, userID uuid.UUID, periodStart time.Time) ([]model.Budget, error)
 	UpsertBudget(ctx context.Context, userID, accountID uuid.UUID, periodStart time.Time, amount int64) error
 	EntryLines(ctx context.Context, userID uuid.UUID, from, to time.Time) ([]model.EntryLine, error)
+	EntryDays(ctx context.Context, userID uuid.UUID, from time.Time) ([]time.Time, error)
 }
 
 // ReportService computes every figure from journal lines on each request; nothing is stored.
@@ -172,7 +173,31 @@ func (s *ReportService) Dashboard(ctx context.Context, userID uuid.UUID, date ti
 		d.Balances = append(d.Balances, model.BalanceRow{AccountID: a.ID, Code: a.Code, Name: a.Name,
 			Category: a.Category, Balance: balance[a.ID]})
 	}
+	// ponytail: looks back one year, so a streak longer than that shows as 366.
+	days, err := s.repo.EntryDays(ctx, userID, date.AddDate(-1, 0, -1))
+	if err != nil {
+		return nil, err
+	}
+	d.StreakDays = streakDays(days, date)
 	return d, nil
+}
+
+// streakDays counts consecutive days with an entry, ending on today or, while today is
+// still empty, yesterday. days may come in any order.
+func streakDays(days []time.Time, today time.Time) int {
+	have := make(map[string]bool, len(days))
+	for _, d := range days {
+		have[d.Format(time.DateOnly)] = true
+	}
+	d := today
+	if !have[d.Format(time.DateOnly)] {
+		d = d.AddDate(0, 0, -1)
+	}
+	n := 0
+	for ; have[d.Format(time.DateOnly)]; d = d.AddDate(0, 0, -1) {
+		n++
+	}
+	return n
 }
 
 func (s *ReportService) Budgets(ctx context.Context, userID uuid.UUID, date time.Time) (*model.BudgetList, error) {

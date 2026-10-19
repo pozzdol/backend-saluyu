@@ -44,6 +44,25 @@ func (l Link) Message() Message {
 	return Message{Subject: l.Subject, Text: text, HTML: b.String()}
 }
 
+//go:embed digest.html
+var digestHTML string
+var digestTmpl = template.Must(template.New("digest").Parse(digestHTML))
+
+// Digest is a reminder email: a short list of lines and one button to the app.
+type Digest struct {
+	Lang, AppURL, Subject, Title, Greeting, Intro, Button, URL, Footer string
+	Items                                                              []string
+}
+
+func (d Digest) Message() Message {
+	var b bytes.Buffer
+	if err := digestTmpl.Execute(&b, d); err != nil {
+		log.Printf("render digest email: %v", err) // the text body still goes out
+	}
+	text := d.Greeting + "\n\n" + d.Intro + "\n\n- " + strings.Join(d.Items, "\n- ") + "\n\n" + d.URL + "\n\n" + d.Footer
+	return Message{Subject: d.Subject, Text: text, HTML: b.String()}
+}
+
 type Sender interface {
 	Send(ctx context.Context, m Message) error
 }

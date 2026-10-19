@@ -56,6 +56,8 @@ type Dashboard struct {
 	ToSavingsTotal int64        `json:"to_savings_total"`
 	Budgets        []BudgetRow  `json:"budgets"`
 	Balances       []BalanceRow `json:"balances"`
+	// StreakDays: consecutive days (ending today or yesterday) with an entry the user recorded.
+	StreakDays int `json:"streak_days"`
 }
 
 type BudgetList struct {
