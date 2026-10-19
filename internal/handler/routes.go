@@ -53,6 +53,7 @@ func RegisterRoutes(r *gin.Engine, users *UserHandler, ledger *LedgerHandler, re
 	app.POST("/cash-counts", ledger.CashCount)
 	app.POST("/reconciliations", ledger.Reconcile)
 	app.GET("/entries", ledger.ListEntries)
+	app.GET("/entries/export", RateLimit(30, time.Minute), ledger.ExportEntries)
 	app.POST("/entries", ledger.PostEntry)
 	app.DELETE("/entries/:id", ledger.DeleteEntry)
 	app.GET("/entries/:id", ledger.GetEntry)

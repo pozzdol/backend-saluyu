@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"strconv"
@@ -123,16 +124,17 @@ func (h *LedgerHandler) PostEntry(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"data": e})
 }
 
-func (h *LedgerHandler) ListEntries(c *gin.Context) {
+// entryFilter reads the filters shared by the entries list and its export.
+func entryFilter(c *gin.Context) (model.EntryFilter, bool) {
 	f := model.EntryFilter{Query: c.Query("q")}
 	var err error
 	if f.From, err = queryDate(c, "from"); err != nil {
 		badQuery(c, "from")
-		return
+		return f, false
 	}
 	if f.To, err = queryDate(c, "to"); err != nil {
 		badQuery(c, "to")
-		return
+		return f, false
 	}
 	if k := c.Query("kind"); k != "" {
 		f.Kind = &k // an unknown kind fails the enum cast in SQL, so validate here first
@@ -140,7 +142,7 @@ func (h *LedgerHandler) ListEntries(c *gin.Context) {
 		case "income", "expense", "transfer", "loan", "repayment", "opening", "cash_count", "adjustment", "borrowing", "installment":
 		default:
 			badQuery(c, "kind")
-			return
+			return f, false
 		}
 	}
 	for name, dst := range map[string]**int64{"amount_min": &f.AmountMin, "amount_max": &f.AmountMax} {
@@ -148,7 +150,7 @@ func (h *LedgerHandler) ListEntries(c *gin.Context) {
 			n, err := strconv.ParseInt(v, 10, 64)
 			if err != nil || n < 0 {
 				badQuery(c, name)
-				return
+				return f, false
 			}
 			*dst = &n
 		}
@@ -157,9 +159,17 @@ func (h *LedgerHandler) ListEntries(c *gin.Context) {
 		id, err := uuid.Parse(v)
 		if err != nil {
 			badQuery(c, "account_id")
-			return
+			return f, false
 		}
 		f.AccountID = &id
+	}
+	return f, true
+}
+
+func (h *LedgerHandler) ListEntries(c *gin.Context) {
+	f, ok := entryFilter(c)
+	if !ok {
+		return
 	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -174,6 +184,30 @@ func (h *LedgerHandler) ListEntries(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": entries, "total": total, "page": page, "limit": limit})
+}
+
+// ExportEntries downloads the filtered entries as CSV or Excel, built in memory so errors stay JSON.
+func (h *LedgerHandler) ExportEntries(c *gin.Context) {
+	format := c.DefaultQuery("format", "csv")
+	if format != "csv" && format != "xlsx" {
+		badQuery(c, "format")
+		return
+	}
+	f, ok := entryFilter(c)
+	if !ok {
+		return
+	}
+	var buf bytes.Buffer
+	if err := h.svc.ExportEntries(c.Request.Context(), currentClaims(c).UserID, f, format == "xlsx", &buf); err != nil {
+		fail(c, "export entries", err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="transaksi.`+format+`"`)
+	if format == "xlsx" {
+		c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
+		return
+	}
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
 }
 
 func (h *LedgerHandler) DeleteEntry(c *gin.Context) {

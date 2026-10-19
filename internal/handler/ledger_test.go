@@ -197,6 +197,9 @@ func (f *fakeLedger) userAccounts(userID uuid.UUID) map[uuid.UUID]*model.Account
 		id := uuid.New()
 		acc[id] = &model.Account{ID: id, Code: t.Code, Name: t.Name, Type: t.Type, Category: t.Category,
 			NormalBalance: model.NormalBalance(t.Type), IsActive: true, Icon: t.Icon, Color: t.Color}
+		if g, ok := model.DefaultNeedGroup[t.Code]; ok {
+			acc[id].NeedGroup = &g
+		}
 	}
 	f.accounts[userID] = acc
 	return acc
@@ -267,6 +270,19 @@ func (f *fakeLedger) UpdateAccount(_ context.Context, userID, id uuid.UUID, req 
 	if req.Color != nil {
 		a.Color = *req.Color
 	}
+	if req.BudgetCarry != nil {
+		if *req.BudgetCarry && !a.BudgetCarry {
+			now := time.Now()
+			a.BudgetCarrySince = &now
+		}
+		a.BudgetCarry = *req.BudgetCarry
+	}
+	if req.NeedGroup != nil {
+		a.NeedGroup = req.NeedGroup
+		if *req.NeedGroup == "none" {
+			a.NeedGroup = nil
+		}
+	}
 	copied := *a
 	return &copied, nil
 }
@@ -312,21 +328,76 @@ func (f *fakeLedger) DeleteEntry(_ context.Context, userID, id uuid.UUID) error 
 	return repository.ErrEntryNotFound
 }
 
-// ListEntries honors only kind and limit: SQL filtering is not what these tests prove.
+// ListEntries honors kind, account and limit, newest first: SQL filtering is not what these tests prove.
 func (f *fakeLedger) ListEntries(_ context.Context, userID uuid.UUID, filter model.EntryFilter) ([]model.Entry, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := []model.Entry{}
 	for _, e := range f.entries[userID] {
-		if filter.Kind == nil || e.Kind == *filter.Kind {
-			out = append(out, *e)
+		if filter.Kind != nil && e.Kind != *filter.Kind {
+			continue
 		}
+		if filter.AccountID != nil && !hasLine(e, *filter.AccountID) {
+			continue
+		}
+		out = append(out, *e)
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].EntryDate.Equal(out[j].EntryDate) {
+			return out[i].EntryDate.After(out[j].EntryDate)
+		}
+		return out[i].EntryNo > out[j].EntryNo
+	})
 	total := len(out)
+	if filter.Offset > 0 {
+		out = out[min(filter.Offset, len(out)):]
+	}
 	if filter.Limit > 0 && len(out) > filter.Limit {
 		out = out[:filter.Limit]
 	}
 	return out, total, nil
+}
+
+func hasLine(e *model.Entry, accountID uuid.UUID) bool {
+	for _, l := range e.Lines {
+		if l.AccountID == accountID {
+			return true
+		}
+	}
+	return false
+}
+
+// RunningBalances is the debit-minus-credit balance after each wanted entry, in date then entry_no order.
+func (f *fakeLedger) RunningBalances(_ context.Context, userID, accountID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	all := append([]*model.Entry(nil), f.entries[userID]...)
+	sort.SliceStable(all, func(i, j int) bool {
+		if !all[i].EntryDate.Equal(all[j].EntryDate) {
+			return all[i].EntryDate.Before(all[j].EntryDate)
+		}
+		return all[i].EntryNo < all[j].EntryNo
+	})
+	want := map[uuid.UUID]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	out := map[uuid.UUID]int64{}
+	var running int64
+	for _, e := range all {
+		if !hasLine(e, accountID) {
+			continue
+		}
+		for _, l := range e.Lines {
+			if l.AccountID == accountID {
+				running += l.Debit - l.Credit
+			}
+		}
+		if want[e.ID] {
+			out[e.ID] = running
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeLedger) LedgerLines(_ context.Context, userID, accountID uuid.UUID, from, _ *time.Time) (int64, []model.LedgerRow, error) {
