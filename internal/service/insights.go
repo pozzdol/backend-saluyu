@@ -17,14 +17,15 @@ func isCash(code, typ, category string) bool {
 	return typ == "Asset" && code != "1101" && category != "Investasi" && category != model.FixedAssetCategory
 }
 
+// isSpendable: cash for day-to-day spending. Savings accounts (Tabungan) are money put
+// aside, so safe-to-spend leaves them out too.
+func isSpendable(code, typ, category string) bool {
+	return isCash(code, typ, category) && category != "Tabungan"
+}
+
 func (s *ReportService) today() time.Time {
 	y, m, d := s.now().Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-}
-
-// periodBack is the period k periods before p.
-func periodBack(p period.Period, k, day int) period.Period {
-	return period.For(p.Start.AddDate(0, -k, 0), day)
 }
 
 func byAccount(rows []model.AmountRow) map[uuid.UUID]int64 {
@@ -42,11 +43,11 @@ func (s *ReportService) periodMoves(ctx context.Context, userID uuid.UUID, p per
 // Insights is the top of the dashboard: safe spending per day, where the money went, the
 // days of the period, a few observations and the budgets running out.
 func (s *ReportService) Insights(ctx context.Context, userID uuid.UUID, date time.Time) (*model.Insights, error) {
-	day, err := s.repo.PeriodStartDay(ctx, userID)
+	cfg, err := s.repo.PeriodConfig(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	p := period.For(date, day)
+	p := period.For(date, cfg)
 	accounts, err := s.repo.ListAccounts(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -57,7 +58,10 @@ func (s *ReportService) Insights(ctx context.Context, userID uuid.UUID, date tim
 	}
 	out := &model.Insights{Period: periodJSON(p), Insights: []model.Insight{}, BudgetAlerts: []model.BudgetAlert{}}
 	out.ByCategory, out.ExpenseTotal = amounts(moves, ofType("Expense"))
-	_, income := amounts(moves, ofType("Revenue"))
+	opening, income, err := s.periodMoney(ctx, userID, p, moves)
+	if err != nil {
+		return nil, err
+	}
 
 	budgets, err := s.budgetRows(ctx, userID, p, activeOf(accounts, "Expense"), moves)
 	if err != nil {
@@ -78,11 +82,17 @@ func (s *ReportService) Insights(ctx context.Context, userID uuid.UUID, date tim
 			out.BudgetAlerts = append(out.BudgetAlerts, model.BudgetAlert{AccountID: b.AccountID, Name: b.Name, Budget: b.Available, Actual: b.Actual, Level: "warn"})
 		}
 	}
-	safe := model.SafePerDay{Basis: "budget", Remaining: unspent}
-	if !budgeted {
-		safe.Basis, safe.Remaining = "surplus", max(income-out.ExpenseTotal, 0)
-	}
 	today := s.today()
+	safe, err := s.safeMoney(ctx, userID, p, accounts, today)
+	if err != nil {
+		return nil, err
+	}
+	safe.OpeningCash, safe.PeriodMoney = opening, opening+income
+	safe.Deficit = out.ExpenseTotal > safe.PeriodMoney
+	if budgeted {
+		// Unspent budgets, but never more than the money that is actually there.
+		safe.Basis, safe.Remaining = "budget", min(unspent, safe.Remaining)
+	}
 	switch {
 	case today.After(p.End):
 		safe.DaysLeft = 0
@@ -119,17 +129,117 @@ func (s *ReportService) Insights(ctx context.Context, userID uuid.UUID, date tim
 		out.Daily[i] = *daily[out.Daily[i].Date]
 	}
 
-	if out.Insights, err = s.observations(ctx, userID, p, day, out.ByCategory, income, out.ExpenseTotal); err != nil {
+	if out.Insights, err = s.observations(ctx, userID, p, cfg, out.ByCategory, income, out.ExpenseTotal); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
+// periodMoney is the spendable cash the period opened with and the income earned in it.
+// Opening balances entered inside the period count as cash at its start. Both go by the
+// period date, so salary paid early for this period counts once, as this period's income.
+// moves must be the period movements of p.
+func (s *ReportService) periodMoney(ctx context.Context, userID uuid.UUID, p period.Period, moves []model.Movement) (opening, income int64, err error) {
+	before, err := s.repo.Movements(ctx, userID, time.Time{}, p.Start, true)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, m := range before {
+		if isSpendable(m.Code, m.Type, m.Category) {
+			opening += m.Debit - m.Credit
+		}
+	}
+	for _, m := range moves {
+		if m.Kind == "opening" && isSpendable(m.Code, m.Type, m.Category) {
+			opening += m.Debit - m.Credit
+		}
+	}
+	_, income = amounts(moves, ofType("Revenue"))
+	return opening, income, nil
+}
+
+// safeMoney is the spendable cash on hand (as of today, inside p) minus what is already
+// promised: card debt, and installments and recurring payments due by the period's end.
+// Going by cash instead of "period money minus expenses" keeps it steady when a bill is
+// paid (cash and the bill drop together) and counts a card purchase once, as card debt.
+func (s *ReportService) safeMoney(ctx context.Context, userID uuid.UUID, p period.Period, accounts []model.Account, today time.Time) (model.SafePerDay, error) {
+	safe := model.SafePerDay{Basis: "period_money"}
+	upTo := today.AddDate(0, 0, 1)
+	if upTo.After(p.Next) {
+		upTo = p.Next
+	} else if upTo.Before(p.Start) {
+		upTo = p.Start
+	}
+	held, err := s.repo.Movements(ctx, userID, time.Time{}, upTo, true)
+	if err != nil {
+		return safe, err
+	}
+	card := map[uuid.UUID]bool{}
+	for _, a := range accounts {
+		card[a.ID] = a.IsCard()
+	}
+	var owed int64
+	for _, m := range held {
+		if isSpendable(m.Code, m.Type, m.Category) {
+			safe.Cash += m.Debit - m.Credit
+		}
+		if card[m.AccountID] {
+			owed += m.Credit - m.Debit
+		}
+	}
+	due, err := s.scheduled(ctx, userID, p.End, accounts)
+	if err != nil {
+		return safe, err
+	}
+	safe.Scheduled = max(owed, 0) + due
+	safe.Remaining = max(safe.Cash-safe.Scheduled, 0)
+	return safe, nil
+}
+
+// scheduled sums unpaid installments and open recurring payments (overdue ones included)
+// due on or before until. Only rules that take money out count: expenses, and transfers
+// from spendable cash to somewhere else. Transfers to a card or loan are left out because
+// the card debt and the installments are counted already.
+// ponytail: income rules are not added back; a salary that is only scheduled is not money yet.
+func (s *ReportService) scheduled(ctx context.Context, userID uuid.UUID, until time.Time, accounts []model.Account) (int64, error) {
+	var total int64
+	plans, err := s.repo.Plans(ctx, userID, nil)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range plans {
+		for _, r := range planSummary(p, true).Rows {
+			if r.Paid == nil && !r.DueDate.After(until) {
+				total += r.Payment
+			}
+		}
+	}
+	if s.recurring == nil {
+		return total, nil
+	}
+	due, err := s.recurring.Upcoming(ctx, userID, until)
+	if err != nil {
+		return 0, err
+	}
+	byID := map[uuid.UUID]model.Account{}
+	for _, a := range accounts {
+		byID[a.ID] = a
+	}
+	for _, o := range due {
+		from, to := byID[o.Rule.FromAccountID], byID[o.Rule.ToAccountID]
+		if o.Rule.Kind == "expense" || o.Rule.Kind == "transfer" && isSpendable(from.Code, from.Type, from.Category) &&
+			!isSpendable(to.Code, to.Type, to.Category) && to.Kind != "loan" && !to.IsCard() {
+			total += o.Rule.Amount
+		}
+	}
+	return total, nil
+}
+
 const insightFloor = 5_000_000 // Rp50.000: smaller changes are noise
 
 // observations compares this period with the last one and the average of the three before.
-func (s *ReportService) observations(ctx context.Context, userID uuid.UUID, p period.Period, day int, cats []model.AmountRow, income, expense int64) ([]model.Insight, error) {
-	prevMoves, err := s.periodMoves(ctx, userID, periodBack(p, 1, day))
+func (s *ReportService) observations(ctx context.Context, userID uuid.UUID, p period.Period, cfg period.Config, cats []model.AmountRow, income, expense int64) ([]model.Insight, error) {
+	prevMoves, err := s.periodMoves(ctx, userID, period.Back(p, 1, cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +248,7 @@ func (s *ReportService) observations(ctx context.Context, userID uuid.UUID, p pe
 	prev := byAccount(prevCats)
 	avg := map[uuid.UUID]int64{}
 	for k := 1; k <= 3; k++ {
-		m, err := s.periodMoves(ctx, userID, periodBack(p, k, day))
+		m, err := s.periodMoves(ctx, userID, period.Back(p, k, cfg))
 		if err != nil {
 			return nil, err
 		}
@@ -213,14 +323,14 @@ func netWorth(moves []model.Movement) int64 {
 // Trends returns n periods ending with the one containing date.
 // ponytail: two queries per period (n=12 is 24 small grouped queries); one windowed query if it gets slow.
 func (s *ReportService) Trends(ctx context.Context, userID uuid.UUID, date time.Time, n int) ([]model.TrendPoint, error) {
-	day, err := s.repo.PeriodStartDay(ctx, userID)
+	cfg, err := s.repo.PeriodConfig(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	p := period.For(date, day)
+	p := period.For(date, cfg)
 	out := make([]model.TrendPoint, 0, n)
 	for k := n - 1; k >= 0; k-- {
-		q := periodBack(p, k, day)
+		q := period.Back(p, k, cfg)
 		moves, err := s.periodMoves(ctx, userID, q)
 		if err != nil {
 			return nil, err
@@ -250,15 +360,15 @@ func judge(value, good, warn float64, lowerIsOK bool) model.Ratio {
 
 // Health judges the last 12 complete periods (fewer while the books are young).
 func (s *ReportService) Health(ctx context.Context, userID uuid.UUID, date time.Time) (*model.Health, error) {
-	day, err := s.repo.PeriodStartDay(ctx, userID)
+	cfg, err := s.repo.PeriodConfig(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	p := period.For(date, day)
+	p := period.For(date, cfg)
 	type totals struct{ income, expense, debt int64 }
 	var past []totals // most recent first, only periods with activity
 	for k := 1; k <= 12; k++ {
-		moves, err := s.periodMoves(ctx, userID, periodBack(p, k, day))
+		moves, err := s.periodMoves(ctx, userID, period.Back(p, k, cfg))
 		if err != nil {
 			return nil, err
 		}
@@ -422,7 +532,7 @@ func (s *ReportService) TaxSummary(ctx context.Context, userID uuid.UUID, year i
 
 // compare fills Prev and Avg3 on income statement rows and returns the compared totals.
 func (s *ReportService) compare(ctx context.Context, userID uuid.UUID, p period.Period, is *model.IncomeStatement) error {
-	day, err := s.repo.PeriodStartDay(ctx, userID)
+	cfg, err := s.repo.PeriodConfig(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -433,7 +543,7 @@ func (s *ReportService) compare(ctx context.Context, userID uuid.UUID, p period.
 		prev[i], sum[i] = map[uuid.UUID]int64{}, map[uuid.UUID]int64{}
 	}
 	for k := 1; k <= 3; k++ {
-		moves, err := s.periodMoves(ctx, userID, periodBack(p, k, day))
+		moves, err := s.periodMoves(ctx, userID, period.Back(p, k, cfg))
 		if err != nil {
 			return err
 		}

@@ -58,6 +58,7 @@ func main() {
 	}
 	creditHandler := handler.NewCreditHandler(service.NewCreditService(ledgerRepo, ledgerSvc))
 	recurringSvc := service.NewRecurringService(ledgerRepo, ledgerSvc)
+	reportSvc.UseRecurring(recurringSvc)
 	recurringSvc.StartJob(context.Background(), time.Hour)
 	automationHandler := handler.NewAutomationHandler(recurringSvc, service.NewImportService(ledgerRepo, ledgerSvc))
 	handler.RegisterRoutes(r, userHandler, ledgerHandler, reportHandler, shareHandler, creditHandler, automationHandler, tokenMaker)

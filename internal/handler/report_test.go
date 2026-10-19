@@ -189,10 +189,10 @@ func TestPeriodStartDay(t *testing.T) {
 		t.Fatalf("default period_start_day %v, want 25", day)
 	}
 
-	code, body := call(t, r, "PATCH", "/api/v1/me", tok, `{"period_start_day":30}`)
-	expect(t, "period_start_day 30", code, 400, body)
-	if msg := body["fields"].(map[string]any)["period_start_day"]; msg != "must be at most 28" {
-		t.Fatalf("period_start_day 30 message %q", msg)
+	code, body := call(t, r, "PATCH", "/api/v1/me", tok, `{"period_start_day":32}`)
+	expect(t, "period_start_day 32", code, 400, body)
+	if msg := body["fields"].(map[string]any)["period_start_day"]; msg != "must be at most 31" {
+		t.Fatalf("period_start_day 32 message %q", msg)
 	}
 	code, body = call(t, r, "PATCH", "/api/v1/me", tok, `{"period_start_day":10}`)
 	expect(t, "period_start_day 10", code, 200, body)

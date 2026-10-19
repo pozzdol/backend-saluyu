@@ -73,6 +73,11 @@ type Dashboard struct {
 	Balances       []BalanceRow `json:"balances"`
 	// StreakDays: consecutive days (ending today or yesterday) with an entry the user recorded.
 	StreakDays int `json:"streak_days"`
+	// OpeningCash is spendable cash at the period's start; PeriodMoney adds the period's
+	// income. Spending past PeriodMoney is a deficit, not spending past income.
+	OpeningCash int64 `json:"opening_cash"`
+	PeriodMoney int64 `json:"period_money"`
+	CashTotal   int64 `json:"cash_total"` // "total uangku": every cash, bank, e-wallet and savings balance
 }
 
 type BudgetList struct {
@@ -159,7 +164,14 @@ type SafePerDay struct {
 	Amount    int64  `json:"amount"`
 	Remaining int64  `json:"remaining"`
 	DaysLeft  int    `json:"days_left"`
-	Basis     string `json:"basis"` // budget (unspent budgets) or surplus (income minus spending)
+	Basis     string `json:"basis"` // budget (unspent budgets, capped by cash) or period_money (cash minus bills)
+	// Remaining = Cash - Scheduled for period_money. Cash is spendable cash now; Scheduled is
+	// card debt plus installments and recurring payments due by the period's end.
+	Cash        int64 `json:"cash"`
+	Scheduled   int64 `json:"scheduled"`
+	OpeningCash int64 `json:"opening_cash"`
+	PeriodMoney int64 `json:"period_money"` // OpeningCash + the period's income
+	Deficit     bool  `json:"deficit"`      // spending passed PeriodMoney
 }
 
 // Insight is one observation; the frontend words it in the user's language.

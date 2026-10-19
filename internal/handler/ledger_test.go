@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/pozzdol/backend-saluyu/internal/model"
+	"github.com/pozzdol/backend-saluyu/internal/period"
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 )
 
@@ -21,7 +22,7 @@ type fakeLedger struct {
 	accounts map[uuid.UUID]map[uuid.UUID]*model.Account // user -> id -> account
 	entries  map[uuid.UUID][]*model.Entry               // user -> entries
 	start    map[uuid.UUID]time.Time                    // user -> start date
-	startDay map[uuid.UUID]int                          // user -> period_start_day; missing = 25, the column default
+	startDay map[uuid.UUID]period.Config                // user -> period settings; missing = payday 25, the column default
 	budgets  map[uuid.UUID][]model.Budget               // user -> budgets, unique per (account, period start)
 	contacts map[uuid.UUID]map[uuid.UUID]string         // user -> contact id -> name
 	links    map[uuid.UUID]uuid.UUID                    // contact id -> linked user id
@@ -44,24 +45,24 @@ func (f *fakeLedger) LockedUntil(_ context.Context, userID uuid.UUID) (*time.Tim
 func newFakeLedger() *fakeLedger {
 	return &fakeLedger{accounts: map[uuid.UUID]map[uuid.UUID]*model.Account{},
 		entries: map[uuid.UUID][]*model.Entry{}, start: map[uuid.UUID]time.Time{},
-		startDay: map[uuid.UUID]int{}, budgets: map[uuid.UUID][]model.Budget{},
+		startDay: map[uuid.UUID]period.Config{}, budgets: map[uuid.UUID][]model.Budget{},
 		contacts: map[uuid.UUID]map[uuid.UUID]string{}, links: map[uuid.UUID]uuid.UUID{}, share: newFakeShare(),
 		revs: map[uuid.UUID][]model.Revision{}, changes: map[uuid.UUID]*fakeChange{}, credit: newFakeCredit(), locked: map[uuid.UUID]time.Time{}}
 }
 
-func (f *fakeLedger) setPeriodStartDay(userID uuid.UUID, day int) {
+func (f *fakeLedger) setPeriod(userID uuid.UUID, c period.Config) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.startDay[userID] = day
+	f.startDay[userID] = c
 }
 
-func (f *fakeLedger) PeriodStartDay(_ context.Context, userID uuid.UUID) (int, error) {
+func (f *fakeLedger) PeriodConfig(_ context.Context, userID uuid.UUID) (period.Config, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if d, ok := f.startDay[userID]; ok {
-		return d, nil
+	if c, ok := f.startDay[userID]; ok {
+		return c, nil
 	}
-	return 25, nil
+	return period.Config{Mode: "payday", Day: 25}, nil
 }
 
 // Movements sums lines per account and kind for entries dated in [from, to), sorted by code like the SQL.
@@ -217,6 +218,7 @@ func (f *fakeLedger) ListAccounts(_ context.Context, userID uuid.UUID) ([]model.
 				if l.AccountID == a.ID && !e.EntryDate.Before(since) {
 					copied.Uses30d++
 				}
+				copied.HasEntries = copied.HasEntries || l.AccountID == a.ID
 			}
 		}
 		out = append(out, copied)

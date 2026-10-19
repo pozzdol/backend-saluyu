@@ -50,7 +50,7 @@ type LedgerRepository interface {
 	LedgerLines(ctx context.Context, userID, accountID uuid.UUID, from, to *time.Time) (int64, []model.LedgerRow, error)
 	TrialBalanceTotals(ctx context.Context, userID uuid.UUID, asOf time.Time) ([]model.TrialBalanceRow, error)
 	StartDate(ctx context.Context, userID uuid.UUID) (*time.Time, error)
-	PeriodStartDay(ctx context.Context, userID uuid.UUID) (int, error)
+	PeriodConfig(ctx context.Context, userID uuid.UUID) (period.Config, error)
 	BalanceAsOf(ctx context.Context, userID, accountID uuid.UUID, date time.Time) (int64, error)
 	ReplaceOpening(ctx context.Context, userID uuid.UUID, startDate time.Time, before, e *model.Entry) error
 	GetEntry(ctx context.Context, userID, id uuid.UUID) (*model.Entry, error)
@@ -308,11 +308,11 @@ func (s *LedgerService) buildSimple(ctx context.Context, userID uuid.UUID, req m
 	}
 	// ponytail: next_period is ignored for other kinds; only early salary needs it.
 	if req.NextPeriod && req.Kind == "income" {
-		day, err := s.repo.PeriodStartDay(ctx, userID)
+		cfg, err := s.repo.PeriodConfig(ctx, userID)
 		if err != nil {
 			return nil, nil, err
 		}
-		next := period.For(date, day).Next
+		next := period.For(date, cfg).Next
 		e.PeriodDate = &next
 	}
 	return e, accounts, nil

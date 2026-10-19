@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/pozzdol/backend-saluyu/internal/model"
+	"github.com/pozzdol/backend-saluyu/internal/period"
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 	"github.com/pozzdol/backend-saluyu/internal/service"
 	"github.com/pozzdol/backend-saluyu/internal/token"
@@ -36,7 +37,7 @@ func (f *fakeRepo) Create(_ context.Context, u *model.User) error {
 		}
 	}
 	u.ID, u.CreatedAt, u.UpdatedAt = uuid.New(), time.Now(), time.Now()
-	u.PeriodStartDay = 25 // column default
+	u.PeriodStartDay, u.PeriodMode, u.PeriodWeekday = 25, "payday", 1 // column defaults
 	copied := *u
 	f.users[u.ID] = &copied
 	return nil
@@ -91,9 +92,15 @@ func (f *fakeRepo) Update(_ context.Context, id uuid.UUID, req model.UpdateProfi
 	}
 	if req.PeriodStartDay != nil {
 		u.PeriodStartDay = *req.PeriodStartDay
-		if f.ledger != nil {
-			f.ledger.setPeriodStartDay(id, u.PeriodStartDay)
-		}
+	}
+	if req.PeriodMode != nil {
+		u.PeriodMode = *req.PeriodMode
+	}
+	if req.PeriodWeekday != nil {
+		u.PeriodWeekday = *req.PeriodWeekday
+	}
+	if f.ledger != nil {
+		f.ledger.setPeriod(id, period.Config{Mode: u.PeriodMode, Day: u.PeriodStartDay, Weekday: u.PeriodWeekday})
 	}
 	u.UpdatedAt = time.Now()
 	copied := *u
@@ -169,8 +176,10 @@ func newTestServer() (*gin.Engine, *fakeRepo) {
 		Users: repo, Sessions: newFakeSessions(), Security: newFakeSecurity(), Mail: box,
 		Token: tm, TOTP: totp.NewBox("test-secret"), RefreshTTL: time.Hour, AppURL: "http://app.test",
 	})
+	recurringSvc := service.NewRecurringService(fl, ledgerSvc)
+	reportSvc.UseRecurring(recurringSvc)
 	RegisterRoutes(r, NewUserHandler(users), ledger, reports, share, NewCreditHandler(service.NewCreditService(fl, ledgerSvc)),
-		NewAutomationHandler(service.NewRecurringService(fl, ledgerSvc), service.NewImportService(fl, ledgerSvc)), tm)
+		NewAutomationHandler(recurringSvc, service.NewImportService(fl, ledgerSvc)), tm)
 	mailboxes.Store(r, box)
 	return r, repo
 }
