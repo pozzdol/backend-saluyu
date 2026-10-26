@@ -26,6 +26,7 @@ type fakeLedger struct {
 	budgets  map[uuid.UUID][]model.Budget               // user -> budgets, unique per (account, period start)
 	contacts map[uuid.UUID]map[uuid.UUID]string         // user -> contact id -> name
 	links    map[uuid.UUID]uuid.UUID                    // contact id -> linked user id
+	limits   map[uuid.UUID]int64                        // contact id -> lending limit
 	share    *fakeShare                                 // groups, invites and loan requests
 	revs     map[uuid.UUID][]model.Revision             // entry -> revisions
 	changes  map[uuid.UUID]*fakeChange                  // loan change requests

@@ -32,7 +32,7 @@ func (s *LedgerService) CreateContact(ctx context.Context, userID uuid.UUID, req
 }
 
 func (s *LedgerService) RenameContact(ctx context.Context, userID, id uuid.UUID, req model.ContactRequest) (*model.Contact, error) {
-	if err := s.repo.RenameContact(ctx, userID, id, req.Name); err != nil {
+	if err := s.repo.RenameContact(ctx, userID, id, req.Name, req.Limit); err != nil {
 		return nil, err
 	}
 	return s.contact(ctx, userID, id)

@@ -62,7 +62,7 @@ type LedgerRepository interface {
 	ListContacts(ctx context.Context, userID uuid.UUID, only *uuid.UUID) ([]model.Contact, error)
 	ContactIDs(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]bool, error)
 	CreateContact(ctx context.Context, userID uuid.UUID, name string) (*model.Contact, error)
-	RenameContact(ctx context.Context, userID, id uuid.UUID, name string) error
+	RenameContact(ctx context.Context, userID, id uuid.UUID, name string, limit *int64) error
 	DeleteContact(ctx context.Context, userID, id uuid.UUID) error
 	ContactHistory(ctx context.Context, userID, contactID uuid.UUID) ([]model.ContactLine, error)
 	SharesActiveGroup(ctx context.Context, a, b uuid.UUID) (bool, error)
@@ -132,7 +132,8 @@ func fits(kind, side string, a model.Account) bool {
 	money := (a.Type == "Asset" && !a.IsFixedAsset()) || (a.Type == "Liability" && a.IsCard())
 	switch kind + "/" + side {
 	case "income/from":
-		return a.Type == "Revenue" // Dr Bank / Cr Gaji
+		// Dr Bank / Cr Gaji, or a refund: Dr Bank / Cr Belanja lowers what the category spent.
+		return a.Type == "Revenue" || a.Type == "Expense"
 	case "income/to":
 		return a.Type == "Asset" && !a.IsFixedAsset()
 	case "expense/from":
@@ -148,14 +149,15 @@ func fits(kind, side string, a model.Account) bool {
 }
 
 var sideWords = map[string][2]string{
-	"income":   {"Revenue", "Asset"},
+	"income":   {"Revenue or Expense (refund)", "Asset"},
 	"expense":  {"Asset or card", "Expense"},
 	"transfer": {"Asset or card", "Asset or Liability"},
 }
 
 // PostEntry turns a simple form into a two-line journal entry: money leaves `from` (credit)
-// and arrives in `to` (debit). Refunds are income to 4003 Pengembalian, so no form ever
-// credits an expense account and expense balances cannot go negative.
+// and arrives in `to` (debit). A refund credits the expense it came back from, so the
+// category's spending and budget go down; a period with more refunds than spending shows
+// that category negative.
 //
 // With a client id, sending the same entry again returns the first one: the offline queue
 // retries until it hears back, and the unique index settles two sends that race.

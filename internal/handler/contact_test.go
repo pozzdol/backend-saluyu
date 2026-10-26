@@ -24,6 +24,9 @@ func (f *fakeLedger) ListContacts(_ context.Context, userID uuid.UUID, only *uui
 			continue
 		}
 		c := model.Contact{ID: id, Name: name}
+		if l, ok := f.limits[id]; ok {
+			c.Limit = &l
+		}
 		if linked, ok := f.links[id]; ok {
 			c.LinkedUserID = &linked
 		}
@@ -82,7 +85,7 @@ func (f *fakeLedger) CreateContact(_ context.Context, userID uuid.UUID, name str
 	return &c, nil
 }
 
-func (f *fakeLedger) RenameContact(_ context.Context, userID, id uuid.UUID, name string) error {
+func (f *fakeLedger) RenameContact(_ context.Context, userID, id uuid.UUID, name string, limit *int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.contacts[userID][id]; !ok {
@@ -92,6 +95,16 @@ func (f *fakeLedger) RenameContact(_ context.Context, userID, id uuid.UUID, name
 		return repository.ErrContactNameTaken
 	}
 	f.contacts[userID][id] = name
+	if limit != nil {
+		if f.limits == nil {
+			f.limits = map[uuid.UUID]int64{}
+		}
+		if *limit == 0 {
+			delete(f.limits, id)
+		} else {
+			f.limits[id] = *limit
+		}
+	}
 	return nil
 }
 

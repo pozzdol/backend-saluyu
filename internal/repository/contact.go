@@ -20,7 +20,7 @@ var (
 // only narrows the result to one contact; nil returns all of the user's contacts.
 func (r *LedgerRepository) ListContacts(ctx context.Context, userID uuid.UUID, only *uuid.UUID) ([]model.Contact, error) {
 	rows, err := r.db.QueryContext(ctx, `
-	SELECT c.id, c.name, c.linked_user_id,
+	SELECT c.id, c.name, c.linked_user_id, c.credit_limit,
 	       COALESCE(SUM(CASE WHEN a.code = '1101' THEN l.debit - l.credit END), 0),
 	       COALESCE(SUM(CASE WHEN a.code = '2101' THEN l.credit - l.debit END), 0)
 	FROM contacts c
@@ -37,7 +37,7 @@ func (r *LedgerRepository) ListContacts(ctx context.Context, userID uuid.UUID, o
 	out := []model.Contact{}
 	for rows.Next() {
 		var c model.Contact
-		if err := rows.Scan(&c.ID, &c.Name, &c.LinkedUserID, &c.Receivable, &c.Payable); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.LinkedUserID, &c.Limit, &c.Receivable, &c.Payable); err != nil {
 			return nil, err
 		}
 		c.Net = c.Receivable - c.Payable
@@ -81,8 +81,12 @@ func (r *LedgerRepository) CreateContact(ctx context.Context, userID uuid.UUID, 
 	return &c, nil
 }
 
-func (r *LedgerRepository) RenameContact(ctx context.Context, userID, id uuid.UUID, name string) error {
-	res, err := r.db.ExecContext(ctx, `UPDATE contacts SET name = $3 WHERE id = $1 AND user_id = $2`, id, userID, name)
+// RenameContact sets the name and, when limit is not nil, the lending limit (0 removes it).
+func (r *LedgerRepository) RenameContact(ctx context.Context, userID, id uuid.UUID, name string, limit *int64) error {
+	res, err := r.db.ExecContext(ctx, `
+	UPDATE contacts SET name = $3,
+	       credit_limit = CASE WHEN $4::bigint IS NULL THEN credit_limit ELSE NULLIF($4, 0) END
+	WHERE id = $1 AND user_id = $2`, id, userID, name, limit)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return ErrContactNameTaken

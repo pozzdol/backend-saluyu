@@ -14,10 +14,13 @@ type Contact struct {
 	Receivable   int64      `json:"receivable"` // they owe me (1101)
 	Payable      int64      `json:"payable"`    // I owe them (2101)
 	Net          int64      `json:"net"`        // receivable - payable; positive = they owe me
+	Limit        *int64     `json:"limit"`      // lending limit; nil = none
 }
 
 type ContactRequest struct {
 	Name string `json:"name" binding:"required,max=100"`
+	// Limit sets the lending limit on rename (PATCH): nil keeps it, 0 removes it.
+	Limit *int64 `json:"limit" binding:"omitempty,gte=0"`
 }
 
 func (r *ContactRequest) Normalize() {
