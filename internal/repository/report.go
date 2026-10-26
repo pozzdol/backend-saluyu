@@ -14,7 +14,7 @@ import (
 // A zero from means since the beginning.
 func (r *LedgerRepository) Movements(ctx context.Context, userID uuid.UUID, from, to time.Time, byPeriodDate bool) ([]model.Movement, error) {
 	rows, err := r.db.QueryContext(ctx, `
-	SELECT a.id, a.code, a.name, a.type, a.category, e.kind, SUM(l.debit), SUM(l.credit)
+	SELECT a.id, a.code, a.name, a.type, a.category, e.kind, a.kind, SUM(l.debit), SUM(l.credit)
 	FROM journal_lines l
 	JOIN journal_entries e ON e.id = l.entry_id
 	JOIN accounts a ON a.id = l.account_id
@@ -31,7 +31,7 @@ func (r *LedgerRepository) Movements(ctx context.Context, userID uuid.UUID, from
 	var out []model.Movement
 	for rows.Next() {
 		var m model.Movement
-		if err := rows.Scan(&m.AccountID, &m.Code, &m.Name, &m.Type, &m.Category, &m.Kind, &m.Debit, &m.Credit); err != nil {
+		if err := rows.Scan(&m.AccountID, &m.Code, &m.Name, &m.Type, &m.Category, &m.Kind, &m.AccountKind, &m.Debit, &m.Credit); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

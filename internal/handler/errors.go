@@ -40,6 +40,7 @@ var apiErrors = []apiError{
 	{service.ErrContactNameTaken, http.StatusConflict, "contact_name_taken"},
 	{service.ErrContactHasBalance, http.StatusConflict, "contact_has_balance"},
 	{service.ErrContactHasHistory, http.StatusConflict, "contact_has_history"},
+	{service.ErrAccountHasBalance, http.StatusConflict, "account_has_balance"},
 	{service.ErrOverpayment, http.StatusConflict, "overpayment"},
 	{service.ErrLoanNotPending, http.StatusConflict, "already_answered"},
 	{service.ErrEntryLocked, http.StatusConflict, "entry_locked"},

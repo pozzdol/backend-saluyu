@@ -17,10 +17,10 @@ func isCash(code, typ, category string) bool {
 	return typ == "Asset" && code != "1101" && category != "Investasi" && category != model.FixedAssetCategory
 }
 
-// isSpendable: cash for day-to-day spending. Savings accounts (Tabungan) are money put
-// aside, so safe-to-spend leaves them out too.
-func isSpendable(code, typ, category string) bool {
-	return isCash(code, typ, category) && category != "Tabungan"
+// isSpendable: cash for day-to-day spending. Savings accounts (Tabungan, or any account marked
+// saving such as a "Dana Darurat") are money put aside, so safe-to-spend leaves them out too.
+func isSpendable(code, typ, category, kind string) bool {
+	return isCash(code, typ, category) && category != "Tabungan" && kind != "saving"
 }
 
 func (s *ReportService) today() time.Time {
@@ -145,12 +145,12 @@ func (s *ReportService) periodMoney(ctx context.Context, userID uuid.UUID, p per
 		return 0, 0, err
 	}
 	for _, m := range before {
-		if isSpendable(m.Code, m.Type, m.Category) {
+		if isSpendable(m.Code, m.Type, m.Category, m.AccountKind) {
 			opening += m.Debit - m.Credit
 		}
 	}
 	for _, m := range moves {
-		if m.Kind == "opening" && isSpendable(m.Code, m.Type, m.Category) {
+		if m.Kind == "opening" && isSpendable(m.Code, m.Type, m.Category, m.AccountKind) {
 			opening += m.Debit - m.Credit
 		}
 	}
@@ -180,7 +180,7 @@ func (s *ReportService) safeMoney(ctx context.Context, userID uuid.UUID, p perio
 	}
 	var owed int64
 	for _, m := range held {
-		if isSpendable(m.Code, m.Type, m.Category) {
+		if isSpendable(m.Code, m.Type, m.Category, m.AccountKind) {
 			safe.Cash += m.Debit - m.Credit
 		}
 		if card[m.AccountID] {
@@ -227,8 +227,8 @@ func (s *ReportService) scheduled(ctx context.Context, userID uuid.UUID, until t
 	}
 	for _, o := range due {
 		from, to := byID[o.Rule.FromAccountID], byID[o.Rule.ToAccountID]
-		if o.Rule.Kind == "expense" || o.Rule.Kind == "transfer" && isSpendable(from.Code, from.Type, from.Category) &&
-			!isSpendable(to.Code, to.Type, to.Category) && to.Kind != "loan" && !to.IsCard() {
+		if o.Rule.Kind == "expense" || o.Rule.Kind == "transfer" && isSpendable(from.Code, from.Type, from.Category, from.Kind) &&
+			!isSpendable(to.Code, to.Type, to.Category, to.Kind) && to.Kind != "loan" && !to.IsCard() {
 			total += o.Rule.Amount
 		}
 	}

@@ -36,13 +36,17 @@ func NewLedgerRepository(db *sql.DB) *LedgerRepository {
 // seedAccounts copies the default chart of accounts to a new user inside the register transaction.
 func seedAccounts(ctx context.Context, tx *sql.Tx, userID uuid.UUID) error {
 	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO accounts (user_id, code, name, type, category, normal_balance, icon, color, need_group) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''))`)
+		`INSERT INTO accounts (user_id, code, name, type, category, normal_balance, icon, color, need_group, kind) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''), $10)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, a := range model.DefaultAccounts {
-		if _, err := stmt.ExecContext(ctx, userID, a.Code, a.Name, a.Type, a.Category, model.NormalBalance(a.Type), a.Icon, a.Color, model.DefaultNeedGroup[a.Code]); err != nil {
+		kind := "general"
+		if a.Type == "Asset" {
+			kind = model.AssetKind(a.Category, nil)
+		}
+		if _, err := stmt.ExecContext(ctx, userID, a.Code, a.Name, a.Type, a.Category, model.NormalBalance(a.Type), a.Icon, a.Color, model.DefaultNeedGroup[a.Code], kind); err != nil {
 			return err
 		}
 	}
@@ -134,9 +138,12 @@ func (r *LedgerRepository) UpdateAccount(ctx context.Context, userID, id uuid.UU
 	                              WHEN $8 THEN budget_carry_since END,
 	    budget_carry = COALESCE($8, budget_carry),
 	    need_group = CASE WHEN $9::text IS NULL THEN need_group WHEN $9 = 'none' THEN NULL ELSE $9 END,
+	    -- savings on/off applies to plain assets; cards and loans keep their kind
+	    kind = CASE WHEN $10::bool IS NOT NULL AND type = 'Asset' AND kind IN ('general', 'saving')
+	                THEN CASE WHEN $10 THEN 'saving' ELSE 'general' END ELSE kind END,
 	    updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+accountColumns, id, userID, req.Name, req.Category, req.IsActive, req.Icon, req.Color, req.BudgetCarry, req.NeedGroup).
+	RETURNING `+accountColumns, id, userID, req.Name, req.Category, req.IsActive, req.Icon, req.Color, req.BudgetCarry, req.NeedGroup, req.Saving).
 		Scan(&a.ID, &a.Code, &a.Name, &a.Type, &a.Category, &a.NormalBalance, &a.IsActive, &a.Icon, &a.Color, &a.Kind, &a.BudgetCarry, &a.BudgetCarrySince, &a.NeedGroup)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrAccountNotFound

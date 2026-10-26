@@ -22,14 +22,29 @@ type Account struct {
 	// HasEntries: the account has at least one journal line. Quick Add hides system
 	// categories (5108, 5199) until they do.
 	HasEntries bool `json:"has_entries"`
-	// Kind is "general", or for liabilities "credit_card", "paylater" (a card with a bill)
-	// or "loan" (an installment plan).
+	// Kind is "general"; for assets "saving" (money put aside: moves there count as savings);
+	// for liabilities "credit_card", "paylater" (a card with a bill) or "loan" (an installment plan).
 	Kind string `json:"kind"`
 	// BudgetCarry rolls the unspent budget into the next period (envelope); BudgetCarrySince
 	// is the day it was switched on. NeedGroup is the 50/30/20 group: needs, wants, savings or nil.
 	BudgetCarry      bool       `json:"budget_carry"`
 	BudgetCarrySince *time.Time `json:"-"`
 	NeedGroup        *string    `json:"need_group"`
+}
+
+// AssetKind decides "saving" or "general" for an asset. An explicit choice wins; without one
+// the built-in savings groups count as saving.
+func AssetKind(category string, saving *bool) string {
+	if saving != nil {
+		if *saving {
+			return "saving"
+		}
+		return "general"
+	}
+	if category == "Tabungan" || category == "Investasi" {
+		return "saving"
+	}
+	return "general"
 }
 
 // IsCard reports whether purchases may be charged to this account.
@@ -96,6 +111,7 @@ type CreateAccountRequest struct {
 	Name     string `json:"name" binding:"required,max=100"`
 	Type     string `json:"type" binding:"required,oneof=Asset Liability Equity Revenue Expense"`
 	Category string `json:"category" binding:"max=100"`
+	Saving   *bool  `json:"saving"` // assets only; nil = decided by the group
 	Icon     string `json:"icon" binding:"omitempty,oneof=wallet landmark piggy-bank smartphone trending-up hand-coins handshake scale briefcase percent rotate-ccw sparkles car utensils cookie clapperboard house receipt coins shopping-cart shopping-bag coffee bus fuel plane heart-pulse graduation-cap baby gift shirt zap wifi phone dumbbell gamepad-2 book paw-print wrench tv credit-card banknote building-2 store"`
 	Color    string `json:"color" binding:"omitempty,oneof=slate zinc red orange amber yellow lime green emerald teal cyan sky blue indigo violet purple fuchsia pink rose"`
 }
@@ -112,6 +128,7 @@ type UpdateAccountRequest struct {
 	Name     *string `json:"name" binding:"omitnil,min=1,max=100"`
 	Category *string `json:"category" binding:"omitnil,max=100"`
 	IsActive *bool   `json:"is_active"`
+	Saving   *bool   `json:"saving"` // assets that are not cards or loans only
 	Icon     *string `json:"icon" binding:"omitnil,oneof=wallet landmark piggy-bank smartphone trending-up hand-coins handshake scale briefcase percent rotate-ccw sparkles car utensils cookie clapperboard house receipt coins shopping-cart shopping-bag coffee bus fuel plane heart-pulse graduation-cap baby gift shirt zap wifi phone dumbbell gamepad-2 book paw-print wrench tv credit-card banknote building-2 store"`
 	Color    *string `json:"color" binding:"omitnil,oneof=slate zinc red orange amber yellow lime green emerald teal cyan sky blue indigo violet purple fuchsia pink rose"`
 	// BudgetCarry switches the envelope on or off. NeedGroup "none" clears the 50/30/20 group.

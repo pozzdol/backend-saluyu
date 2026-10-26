@@ -205,3 +205,35 @@ func TestPeriodStartDay(t *testing.T) {
 		t.Fatalf("period with start day 10: %v", p)
 	}
 }
+
+// A group of the user's own counts as savings when the account is marked saving, and stops
+// when the mark is removed. Before, only the group names "Tabungan" and "Investasi" counted.
+func TestCustomSavingsGroup(t *testing.T) {
+	r, _ := newTestServer()
+	tok := signUp(t, r, "dana@x.com")
+	openBooks(t, r, tok, "2026-10-01")
+	acc := accountIDs(t, r, tok)
+
+	code, body := call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"1010","name":"Dana Darurat","type":"Asset","category":"Dana Darurat","saving":true}`)
+	expect(t, "create saving account", code, 201, body)
+	dana := body["data"].(map[string]any)
+	if dana["kind"] != "saving" {
+		t.Fatalf("custom group marked saving: %v", dana)
+	}
+	post(t, r, tok, entryBody("income", "2026-10-02", 500000000, acc["4001"], acc["1001"]))
+	post(t, r, tok, entryBody("transfer", "2026-10-03", 100000000, acc["1001"], dana["id"].(string)))
+
+	d := getData(t, r, tok, "/api/v1/dashboard?date=2026-10-16")
+	wantNum(t, "dashboard", d, "to_savings_total", 100000000)
+
+	code, body = call(t, r, "PATCH", "/api/v1/accounts/"+dana["id"].(string), tok, `{"saving":false}`)
+	expect(t, "unmark saving", code, 200, body)
+	d = getData(t, r, tok, "/api/v1/dashboard?date=2026-10-16")
+	wantNum(t, "dashboard after unmark", d, "to_savings_total", 0)
+
+	code, body = call(t, r, "POST", "/api/v1/accounts", tok, `{"code":"1011","name":"BCA Tabungan","type":"Asset","category":"Tabungan"}`)
+	expect(t, "create Tabungan account", code, 201, body)
+	if body["data"].(map[string]any)["kind"] != "saving" {
+		t.Fatalf("Tabungan group without a choice is saving: %v", body)
+	}
+}

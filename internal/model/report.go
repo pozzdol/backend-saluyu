@@ -122,7 +122,8 @@ type BalanceSheet struct {
 type Movement struct {
 	AccountID                  uuid.UUID
 	Code, Name, Type, Category string
-	Kind                       string
+	Kind                       string // the entry's kind
+	AccountKind                string // the account's kind ("saving" counts as savings)
 	Debit, Credit              int64
 }
 

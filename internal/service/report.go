@@ -230,7 +230,7 @@ func (s *ReportService) Dashboard(ctx context.Context, userID uuid.UUID, date ti
 		d.SavingsRate = float64(d.Surplus) / float64(d.Income)
 	}
 	d.ToSavings, d.ToSavingsTotal = amounts(moves, func(m model.Movement) bool {
-		return m.Type == "Asset" && m.Kind == "transfer" && (m.Category == "Tabungan" || m.Category == "Investasi")
+		return m.Type == "Asset" && m.Kind == "transfer" && m.AccountKind == "saving"
 	})
 
 	if d.Budgets, err = s.budgetRows(ctx, userID, p, activeOf(accounts, "Expense"), moves); err != nil {

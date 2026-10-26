@@ -85,13 +85,43 @@ func (s *LedgerService) CreateAccount(ctx context.Context, userID uuid.UUID, req
 		Code: req.Code, Name: req.Name, Type: req.Type, Category: req.Category, Icon: req.Icon, Color: req.Color,
 		NormalBalance: model.NormalBalance(req.Type),
 	}
+	if req.Type == "Asset" {
+		a.Kind = model.AssetKind(req.Category, req.Saving)
+	}
 	if err := s.repo.CreateAccount(ctx, userID, a); err != nil {
 		return nil, err
 	}
 	return a, nil
 }
 
+// ErrAccountHasBalance stops archiving money that is still there: an archived account leaves
+// the pickers, so its balance could no longer be spent, moved or reconciled.
+var ErrAccountHasBalance = errors.New("move the balance out before archiving this account")
+
+// lastDay counts every entry, future-dated ones included, when checking an account is empty.
+var lastDay = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+
 func (s *LedgerService) UpdateAccount(ctx context.Context, userID, id uuid.UUID, req model.UpdateAccountRequest) (*model.Account, error) {
+	if req.IsActive != nil && !*req.IsActive {
+		accounts, err := s.repo.FindAccounts(ctx, userID, []uuid.UUID{id})
+		if err != nil {
+			return nil, err
+		}
+		a, ok := accounts[id]
+		if !ok {
+			return nil, ErrAccountNotFound
+		}
+		// Only balance-sheet accounts hold a balance; income and spending start again each period.
+		if a.Type == "Asset" || a.Type == "Liability" || a.Type == "Equity" {
+			raw, err := s.repo.BalanceAsOf(ctx, userID, id, lastDay)
+			if err != nil {
+				return nil, err
+			}
+			if raw != 0 {
+				return nil, ErrAccountHasBalance
+			}
+		}
+	}
 	return s.repo.UpdateAccount(ctx, userID, id, req)
 }
 

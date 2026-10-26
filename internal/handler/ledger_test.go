@@ -87,7 +87,7 @@ func (f *fakeLedger) Movements(_ context.Context, userID uuid.UUID, from, to tim
 			m, ok := sums[k]
 			if !ok {
 				a := f.userAccounts(userID)[l.AccountID]
-				m = &model.Movement{AccountID: a.ID, Code: a.Code, Name: a.Name, Type: a.Type, Category: a.Category, Kind: e.Kind}
+				m = &model.Movement{AccountID: a.ID, Code: a.Code, Name: a.Name, Type: a.Type, Category: a.Category, Kind: e.Kind, AccountKind: a.Kind}
 				sums[k] = m
 			}
 			m.Debit += l.Debit
@@ -196,8 +196,12 @@ func (f *fakeLedger) userAccounts(userID uuid.UUID) map[uuid.UUID]*model.Account
 	acc := map[uuid.UUID]*model.Account{}
 	for _, t := range model.DefaultAccounts {
 		id := uuid.New()
+		kind := "general"
+		if t.Type == "Asset" {
+			kind = model.AssetKind(t.Category, nil) // like seedAccounts
+		}
 		acc[id] = &model.Account{ID: id, Code: t.Code, Name: t.Name, Type: t.Type, Category: t.Category,
-			NormalBalance: model.NormalBalance(t.Type), IsActive: true, Icon: t.Icon, Color: t.Color}
+			NormalBalance: model.NormalBalance(t.Type), IsActive: true, Icon: t.Icon, Color: t.Color, Kind: kind}
 		if g, ok := model.DefaultNeedGroup[t.Code]; ok {
 			acc[id].NeedGroup = &g
 		}
@@ -248,6 +252,9 @@ func (f *fakeLedger) CreateAccount(_ context.Context, userID uuid.UUID, a *model
 		}
 	}
 	a.ID, a.IsActive = uuid.New(), true
+	if a.Kind == "" {
+		a.Kind = "general" // the column default
+	}
 	copied := *a
 	f.userAccounts(userID)[a.ID] = &copied
 	return nil
@@ -284,6 +291,12 @@ func (f *fakeLedger) UpdateAccount(_ context.Context, userID, id uuid.UUID, req 
 		if *req.NeedGroup == "none" {
 			a.NeedGroup = nil
 		}
+	}
+	if req.Category != nil {
+		a.Category = *req.Category
+	}
+	if req.Saving != nil && a.Type == "Asset" && (a.Kind == "general" || a.Kind == "saving") {
+		a.Kind = model.AssetKind("", req.Saving)
 	}
 	copied := *a
 	return &copied, nil
@@ -687,4 +700,28 @@ func (f *fakeLedger) EntryByClientID(_ context.Context, userID, clientID uuid.UU
 		}
 	}
 	return nil, repository.ErrEntryNotFound
+}
+
+// An account that still holds money cannot be archived: it would leave the pickers with the
+// money in it. Empty balance-sheet accounts and spending accounts can.
+func TestArchiveNeedsZeroBalance(t *testing.T) {
+	r, _ := newTestServer()
+	tok := signUp(t, r, "arsip@x.com")
+	openBooks(t, r, tok, "2026-10-01")
+	acc := accountIDs(t, r, tok)
+	post(t, r, tok, entryBody("income", "2026-10-02", 100000, acc["4001"], acc["1001"]))
+
+	code, body := call(t, r, "PATCH", "/api/v1/accounts/"+acc["1001"], tok, `{"is_active":false}`)
+	if code != 409 || body["code"] != "account_has_balance" {
+		t.Fatalf("archive account with balance: want 409 account_has_balance, got %d %v", code, body)
+	}
+	code, body = call(t, r, "PATCH", "/api/v1/accounts/"+acc["1003"], tok, `{"is_active":false}`)
+	expect(t, "archive empty Tabungan", code, 200, body)
+	code, body = call(t, r, "PATCH", "/api/v1/accounts/"+acc["4001"], tok, `{"is_active":false}`)
+	expect(t, "archive used income account", code, 200, body)
+
+	// Moving the money out makes it archivable.
+	post(t, r, tok, entryBody("transfer", "2026-10-03", 100000, acc["1001"], acc["1002"]))
+	code, body = call(t, r, "PATCH", "/api/v1/accounts/"+acc["1001"], tok, `{"is_active":false}`)
+	expect(t, "archive emptied bank", code, 200, body)
 }
