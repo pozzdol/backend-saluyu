@@ -97,6 +97,8 @@ var apiErrors = []apiError{
 	{service.ErrTOTPAlreadyEnabled, http.StatusConflict, "totp_already_enabled"},
 	{service.ErrSessionNotFound, http.StatusNotFound, "session_not_found"},
 	{service.ErrEmailUnverified, http.StatusForbidden, "email_unverified"},
+	{service.ErrAssistantOff, http.StatusServiceUnavailable, "ai_disabled"},
+	{service.ErrAssistantFailed, http.StatusBadGateway, "ai_failed"},
 }
 
 // fail maps service errors to HTTP responses in one place.

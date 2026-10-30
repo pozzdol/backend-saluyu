@@ -9,6 +9,7 @@ import (
 	"github.com/pozzdol/backend-saluyu/internal/config"
 	"github.com/pozzdol/backend-saluyu/internal/database"
 	"github.com/pozzdol/backend-saluyu/internal/handler"
+	"github.com/pozzdol/backend-saluyu/internal/llm"
 	"github.com/pozzdol/backend-saluyu/internal/mail"
 	"github.com/pozzdol/backend-saluyu/internal/repository"
 	"github.com/pozzdol/backend-saluyu/internal/service"
@@ -66,6 +67,11 @@ func main() {
 		service.NewCreditService(ledgerRepo, ledgerSvc), mail.New(cfg.ResendAPIKey, cfg.MailFrom), cfg.AppURL)
 	notifySvc.StartJob(context.Background(), time.Hour)
 	handler.RegisterNotifyRoutes(r, handler.NewNotifyHandler(notifySvc), tokenMaker)
+	var ai service.LLM // stays nil without a key: the assistant answers 503
+	if cfg.AIAPIKey != "" {
+		ai = llm.New(cfg.AIEndpoint, cfg.AIAPIKey, cfg.AIModel)
+	}
+	handler.RegisterAssistantRoutes(r, handler.NewAssistantHandler(service.NewAssistantService(ledgerSvc, ai)), tokenMaker)
 
 	log.Printf("listening on http://localhost%s", cfg.ServerPort)
 	if err := r.Run(cfg.ServerPort); err != nil {

@@ -20,6 +20,10 @@ type Config struct {
 	MailFrom     string
 	// AppURL is the frontend origin that links in emails point to.
 	AppURL string
+	// AIEndpoint is an OpenAI-compatible API base URL. Optional: without AIAPIKey the assistant answers 503.
+	AIEndpoint string
+	AIAPIKey   string
+	AIModel    string
 }
 
 func Load() *Config {
@@ -36,6 +40,9 @@ func Load() *Config {
 		ResendAPIKey:    os.Getenv("RESEND_API_KEY"),
 		MailFrom:        getEnv("MAIL_FROM", "Saluyu <noreply@fikriachmad.dev>"),
 		AppURL:          getEnv("APP_URL", "http://localhost:5173"),
+		AIEndpoint:      getEnv("AI_ENDPOINT", "https://api.openai.com/v1"),
+		AIAPIKey:        os.Getenv("AI_API_KEY"),
+		AIModel:         getEnv("AI_MODEL", "gpt-4o-mini"),
 	}
 }
 
